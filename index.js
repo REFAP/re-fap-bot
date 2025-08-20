@@ -43,7 +43,7 @@ if (!DATABASE_URL) {
   });
 }
 
-// ======== PERF RESEAU ========
+// ======== PERF RÉSEAU ========
 // Garde les connexions HTTP/HTTPS ouvertes → latence ↓
 http.globalAgent.keepAlive = true;
 https.globalAgent.keepAlive = true;
@@ -53,7 +53,20 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(compression());
+// Permettre POST texte brut pour nos tests tolérants
+app.use(express.text({ type: "text/*", limit: "1mb" }));
+
+// Ne PAS compresser le SSE, sinon certaines stacks reset la connexion
+app.use(
+  compression({
+    filter: (req, res) => {
+      const accept = req.headers["accept"] || "";
+      const ctype = req.headers["content-type"] || "";
+      if (accept.includes("text/event-stream") || ctype.includes("text/event-stream")) return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 
 // ======== MINI-CACHE TTL (mémoire) ========
 const _cache = new Map();
@@ -61,17 +74,27 @@ function cacheGet(k) {
   const h = _cache.get(k);
   if (!h) return null;
   const { value, exp } = h;
-  if (Date.now() > exp) { _cache.delete(k); return null; }
+  if (Date.now() > exp) {
+    _cache.delete(k);
+    return null;
+  }
   return value;
 }
-function cacheSet(k, v, ttlMs = 10 * 60 * 1000) { // 10 min
+function cacheSet(k, v, ttlMs = 10 * 60 * 1000) {
+  // 10 min par défaut
   _cache.set(k, { value: v, exp: Date.now() + ttlMs });
 }
-function norm(s) { return (s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+function norm(s) {
+  return (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
 
 // ======== UTILS SSE ========
-function sseWrite(res, payload) { res.write(`data:${JSON.stringify(payload)}\n\n`); }
-function sseHeartbeat(res) { res.write(`:hb ${Date.now()}\n\n`); } // commentaire SSE
+function sseWrite(res, payload) {
+  res.write(`data:${JSON.stringify(payload)}\n\n`);
+}
+function sseHeartbeat(res) {
+  res.write(`:hb ${Date.now()}\n\n`);
+} // commentaire SSE
 
 // ======== HEALTHCHECK ========
 app.get("/healthz", async (_req, res) => {
@@ -86,8 +109,7 @@ app.get("/healthz", async (_req, res) => {
 });
 
 // ======== STATIC (optionnel) ========
-// Servez votre front si présent (public/index.html)
-// app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, "public")));
 
 // ======== ADMIN (stubs utiles) ========
 app.get("/api/admin/guess", (_req, res) => {
@@ -116,7 +138,6 @@ app.get("/api/admin/schema", async (_req, res) => {
 });
 
 app.post("/api/admin/rag/diagnose", async (req, res) => {
-  // Point d’entrée “diagnose” non stream (debug RAG)
   const { prompt = "Diagnostic rapide FAP : résume les étapes de contrôle.", temperature = 0.2 } = req.body || {};
   try {
     const chat = await openai.chat.completions.create({
@@ -134,8 +155,54 @@ app.post("/api/admin/rag/diagnose", async (req, res) => {
   }
 });
 
+// ======== HELPERS PARSING MESSAGES (tolérant) ========
+function parseMessages(req) {
+  // 1) JSON { messages: [...] }
+  if (req.is("application/json") && Array.isArray(req.body?.messages)) {
+    return req.body.messages;
+  }
+  // 2) GET ?q=...
+  const q = (req.query?.q ?? "").toString().trim();
+  if (q) {
+    return [
+      { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
+      { role: "user", content: q },
+    ];
+  }
+  // 3) POST texte brut
+  if (typeof req.body === "string" && req.body.trim()) {
+    return [
+      { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
+      { role: "user", content: req.body.trim() },
+    ];
+  }
+  return [];
+}
+
+// ======== DEBUG: STREAM SANS OPENAI ========
+app.get("/debug/stream", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  let i = 0;
+  const iv = setInterval(() => {
+    i += 1;
+    sseWrite(res, { delta: `tick-${i}` });
+    if (i >= 5) {
+      sseWrite(res, { done: true });
+      clearInterval(iv);
+      res.end();
+    }
+  }, 400);
+
+  req.on("close", () => clearInterval(iv));
+});
+
 // ======== STREAMING DIAGNOSE (SSE) ========
-app.post("/api/diagnose/stream", async (req, res) => {
+// POST (JSON ou texte) + GET (?q=...) → même logique.
+async function handleDiagnoseStream(req, res) {
   // Headers SSE
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -147,8 +214,12 @@ app.post("/api/diagnose/stream", async (req, res) => {
   req.on("close", () => clearInterval(hb));
 
   try {
-    const body = req.body || {};
-    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const messages = parseMessages(req);
+    if (!messages.length) {
+      sseWrite(res, { error: "MISSING_MESSAGES" });
+      clearInterval(hb);
+      return res.end();
+    }
 
     // --- Cache: clé = messages normalisés ---
     const cacheKey = norm(JSON.stringify(messages));
@@ -205,12 +276,15 @@ app.post("/api/diagnose/stream", async (req, res) => {
     clearInterval(hb);
     return res.end();
   } catch (e) {
-    const msg = (e && e.message) ? String(e.message) : String(e);
+    const msg = e?.message ? String(e.message) : String(e);
     sseWrite(res, { error: msg });
     clearInterval(hb);
     return res.end();
   }
-});
+}
+
+app.post("/api/diagnose/stream", handleDiagnoseStream);
+app.get("/api/diagnose/stream", handleDiagnoseStream);
 
 // ======== ROOT ========
 app.get("/", (_req, res) => {
@@ -228,7 +302,9 @@ app.get("/", (_req, res) => {
         try {
           const u = new URL(DATABASE_URL);
           return `${u.hostname}:${u.port || 5432}`;
-        } catch { return "db"; }
+        } catch {
+          return "db";
+        }
       })();
       console.log(`✅ PostgreSQL OK | DB: ${db} | host: ${host} | user: ${usr}`);
     } catch (e) {
