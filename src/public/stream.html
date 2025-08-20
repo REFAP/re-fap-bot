@@ -1,0 +1,64 @@
+﻿<!doctype html><meta charset="utf-8" />
+<title>Re-FAP | Stream test</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Arial;margin:24px}
+  .row{display:flex;gap:8px}
+  input{flex:1;padding:8px}
+  button{padding:8px 12px}
+  pre{white-space:pre-wrap;border:1px solid #ddd;padding:12px;margin-top:12px;border-radius:8px;min-height:120px}
+</style>
+
+<h2>Test streaming SSE</h2>
+<div class="row">
+  <input id="input" placeholder="Décris ta panne…" value="Voyant moteur allumé sur 308 HDi 2014, que vérifier en premier ?" />
+  <button id="go">Envoyer</button>
+</div>
+<pre id="bot"></pre>
+
+<script>
+async function streamDiagnose(messages, append, done, err){
+  const r = await fetch("/api/diagnose/stream", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ messages })
+  });
+  if(!r.ok || !r.body) throw new Error("HTTP "+r.status);
+
+  const rd = r.body.getReader(), dec = new TextDecoder();
+  let buf="", bucket="";
+  const flush = () => { if(bucket){ append(bucket); bucket=""; } };
+  const ticker = setInterval(flush, 40); // lisse l’affichage
+
+  for(;;){
+    const {value, done:doneRead} = await rd.read();
+    if(doneRead) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while((i = buf.indexOf("\n\n")) >= 0){
+      const frame = buf.slice(0, i).trim();
+      buf = buf.slice(i + 2);
+      if(frame.startsWith("data:")){
+        try{
+          const p = JSON.parse(frame.slice(5));
+          if(p.delta) bucket += p.delta;
+          if(p.done){ flush(); clearInterval(ticker); return done?.(); }
+          if(p.error){ clearInterval(ticker); return err?.(p.error); }
+        }catch(_) {}
+      }
+    }
+  }
+}
+
+document.getElementById("go").onclick = async () => {
+  const q = document.getElementById("input").value.trim();
+  const out = document.getElementById("bot"); out.textContent = "";
+  const messages = [
+    { role:"system", content:"Tu es un mécano expérimenté. Réponds en français, clair et direct." },
+    { role:"user", content:q }
+  ];
+  try{
+    await streamDiagnose(messages, (t)=>out.textContent += t, ()=>{}, (e)=>out.textContent += "\n[ERR] "+e);
+  }catch(e){
+    out.textContent = String(e);
+  }
+};
+</script>
