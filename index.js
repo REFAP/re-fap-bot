@@ -9,6 +9,10 @@ import express from "express";
 import pg from "pg";
 import "pgvector/pg";
 import OpenAI from "openai";
+import compression from "compression";
+import http from "http";
+import https from "https";
+
 
 const { Pool } = pg;
 
@@ -398,6 +402,12 @@ const app = express();
 app.use(express.json());
 app.set("db", pool);
 app.locals.ADMIN_TOKEN = (process.env.ADMIN_TOKEN || "").trim();
+// --- Perf réseau ---
+http.globalAgent.keepAlive = true;
+https.globalAgent.keepAlive = true;
+
+app.use(compression());
+
 
 // Logger
 app.use((req, _res, next) => { console.log(`${req.method} ${req.url}`); next(); });
@@ -407,6 +417,10 @@ app.get("/healthz", (_req, res) => res.json({ status: "ok", uptime: process.upti
 app.get("/readyz", async (_req, res) => {
   try { await pool.query("select 1"); res.json({ db: "ok" }); }
   catch (e) { res.status(500).json({ db: "down", error: e.message }); }
+});
+// --- Healthcheck ---
+app.get("/healthz", (req, res) => {
+  res.status(200).send("OK");
 });
 
 // Base API
