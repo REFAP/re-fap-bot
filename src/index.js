@@ -67,6 +67,16 @@ app.use(
     },
   })
 );
+// ======== HEALTHCHECK ========
+app.get("/healthz", (_req, res) => {
+  console.log("[HEALTHZ] hit");
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    port: PORT,
+    db: pool ? "configured" : "disabled",
+  });
+});
 
 // ======== MINI-CACHE TTL (mémoire) ========
 const _cache = new Map();
