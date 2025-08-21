@@ -17,23 +17,18 @@
     .err { color: #b00; }
     .small { font-size: 12px; opacity: .7; }
     button { padding: 10px 14px; border-radius: 8px; border: 1px solid #999; cursor: pointer; }
-    input, textarea {
-      padding: 10px 12px; border-radius: 8px; border: 1px solid #ccc; width: 100%;
-      font: inherit;
-    }
+    input { padding: 10px 12px; border-radius: 8px; border: 1px solid #ccc; width: 100%; font: inherit; }
     .hint { margin-top: 12px; }
   </style>
 </head>
 <body>
-  <header>
-    <strong>Re-FAP assistant</strong>
-  </header>
+  <header><strong>Re-FAP assistant</strong></header>
 
   <main>
     <div id="log" aria-live="polite"></div>
 
     <div class="hint small">
-      Saisie un symptôme (ex : « Voyant moteur 308 HDi 2014 »), puis “Envoyer”.
+      Saisis un symptôme (ex : « Voyant moteur 308 HDi 2014 »), puis “Envoyer”.
     </div>
 
     <div class="row" style="margin-top:12px">
@@ -42,8 +37,8 @@
     </div>
 
     <div class="small hint">
-      Streaming via <code>/api/diagnose/stream</code> (GET SSE).  
-      Si le streaming n’est pas disponible, on basculera en réponse non-stream.
+      Streaming via <code>/api/diagnose/stream</code> (GET SSE). Si le streaming n’est pas disponible,
+      on bascule automatiquement en réponse non-stream (<code>/api/admin/rag/diagnose</code>).
     </div>
   </main>
 
@@ -67,34 +62,35 @@
       append('Toi: ' + text, 'you');
 
       // 1) Tentative SSE (GET)
+      let es;
       try {
         const url = '/api/diagnose/stream?q=' + encodeURIComponent(text);
-        const es  = new EventSource(url);
+        es = new EventSource(url);
 
         let gotChunk = false;
+        let closed = false;
 
         es.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data);
             if (data.delta) { append(data.delta, 'bot'); gotChunk = true; }
-            if (data.done)  { es.close(); }
-            if (data.error) { append('Erreur: ' + data.error, 'err'); es.close(); }
+            if (data.error) { append('Erreur SSE: ' + data.error, 'err'); es.close(); closed = true; }
+            if (data.done)  { es.close(); closed = true; }
           } catch {}
         };
-        es.onerror = () => { es.close(); };
-        es.onopen  = () => {};
+        es.onerror = () => { try { es.close(); } catch {} closed = true; };
 
-        // Sécurité : si au bout de 2,5s on n’a rien reçu, on tente le fallback non-stream
+        // Fallback si aucun token reçu sous 2,5s
         setTimeout(async () => {
-          if (!gotChunk) {
+          if (!gotChunk && !closed) {
             try { es.close(); } catch {}
             await fallbackREST(text);
           }
         }, 2500);
 
         return;
-      } catch(e) {
-        // 2) Fallback direct si SSE indisponible
+      } catch (e) {
+        try { es?.close(); } catch {}
         await fallbackREST(text);
       }
     }
@@ -106,18 +102,24 @@
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ prompt: text })
         });
-        const j = await r.json();
-        if (j?.text) append(j.text, 'bot');
-        else append('Erreur: ' + (j?.error || 'réponse vide'), 'err');
-      } catch(e) {
+
+        const ctype = r.headers.get('content-type') || '';
+        if (ctype.includes('application/json')) {
+          const j = await r.json();
+          if (j?.text)       append(j.text, 'bot');
+          else if (j?.error) append('Erreur API: ' + j.error, 'err');
+          else               append('Réponse vide (JSON).', 'err');
+        } else {
+          const txt = await r.text();
+          append(`Erreur réseau (HTTP ${r.status}) : ${txt.substring(0, 300)}${txt.length>300?'…':''}`, 'err');
+        }
+      } catch (e) {
         append('Erreur réseau: ' + e.message, 'err');
       }
     }
 
     btn.onclick = send;
     q.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-
-    // Message de bienvenue
     append('Bot: Salut ! Décris ton symptôme et je t’aide à diagnostiquer.', 'bot');
   </script>
 </body>
