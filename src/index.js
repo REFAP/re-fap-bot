@@ -228,7 +228,7 @@ app.all("/api/diagnose", async (req, res) => {
       ],
       lead_missing: ["brand","model","year","engine","mileage_km","postal_code","contact"],
       cta: { show: false, items: [] }
-    };
+    };	
     const text = stripPayloadBlock(raw);
 
     res.json({ text: text.trim(), payload, mode: "concise" });
@@ -293,7 +293,22 @@ app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => 
       ]
     });
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
-    res.json({ text, mode: "concise", legacy: true });
+    // Heuristique simple : si le texte évoque des cas courants sérieux → CTA on
+function hasAny(s, arr){ s = (s||"").toLowerCase(); return arr.some(k => s.includes(k)); }
+const suggestCTA =
+  (payload.confidence ?? 0) >= 0.65 ||
+  hasAny(text, ["mode dégradé","p024","p0299","p030","p0401","p0420","p242f","p2463","p2452","p244c","capteur pression différentiel","fap","egr"]);
+
+if (suggestCTA) {
+  payload.cta = payload.cta || {};
+  payload.cta.show = true;
+  payload.cta.items = payload.cta.items?.length ? payload.cta.items : [
+    { type: "booking",  label: "Prendre RDV diagnostic",           url: "/rdv" },
+    { type: "callback", label: "Être rappelé par un conseiller",   url: "/rappel" }
+  ];
+}
+
+res.json({ text, mode: "concise", legacy: true });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
