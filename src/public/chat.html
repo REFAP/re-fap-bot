@@ -183,26 +183,123 @@
     };
   });
 
-  // --- SSE robuste : close sur {done:true}, tolère onerror si du texte a été reçu
+  // --- SSE robuste : watchdog + fallback non-stream
   async function streamAnswer(prompt) {
     const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
     let received = false;
+
+    // Watchdog: si aucun token en 8 s → fallback
+    const watchdogMs = 8000;
+    let watchdog;
+    const arm = (resolve, reject) => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(async () => {
+        if (!received) {
+          try {
+            const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
+            const j = await r.json().catch(() => ({}));
+            out.textContent = j?.text || out.textContent || "";
+            renderQuestions(j?.payload?.next_questions);
+            renderCTAs(j?.payload);
+            resolve();
+          } catch {
+            reject(new Error("fallback_failed"));
+          }
+        }
+      }, watchdogMs);
+    };
+
     await new Promise((resolve, reject) => {
       const es = new EventSource(url);
+      arm(resolve, reject);
 
       es.onmessage = (e) => {
         try {
           const o = JSON.parse(e.data);
-          if (o.error) { es.close(); reject(new Error(o.error)); return; }
+          if (o.error) { es.close(); clearTimeout(watchdog); reject(new Error(o.error)); return; }
           if (o.delta) { out.textContent += o.delta; received = true; }
-          if (o.done)  { es.close(); resolve(); }
+          if (o.done)  { es.close(); clearTimeout(watchdog); resolve(); return; }
         } catch {
+          // texte brut
           out.textContent += e.data;
           if (e.data && e.data.length) received = true;
         }
+        arm(resolve, reject);
       };
 
-      es.onerror = () => {
+      es.onerror = async () => {
         es.close();
-        if (received) resolve();   // fermeture propre tolérée
-        else reject(new Error("sse_error_
+        clearTimeout(watchdog);
+        if (received) { resolve(); return; } // fermeture propre tolérée
+        // sinon, fallback non-stream
+        try {
+          const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
+          const j = await r.json().catch(() => ({}));
+          out.textContent = j?.text || out.textContent || "";
+          renderQuestions(j?.payload?.next_questions);
+          renderCTAs(j?.payload);
+          resolve();
+        } catch {
+          reject(new Error("sse_error_and_fallback_failed"));
+        }
+      };
+    });
+  }
+
+  function renderQuestions(nextQuestions){
+    if (!Array.isArray(nextQuestions) || !nextQuestions.length) return;
+    const ul = document.createElement("ul");
+    ul.className = "questions";
+    nextQuestions.forEach(q => {
+      const li = document.createElement("li"); li.className = "ask"; li.textContent = q;
+      ul.appendChild(li);
+    });
+    ctas.appendChild(ul);
+  }
+
+  function renderCTAs(payload){
+    if (!payload) return;
+    // CTAs proposés par le modèle/serveur
+    if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
+      for (const item of payload.cta.items.slice(0,2)) {
+        const b = document.createElement("button");
+        b.textContent = item.label || "Action";
+        b.className = "btn-outline";
+        b.onclick = () => { if (item.url) window.location.href = item.url; };
+        ctas.appendChild(b);
+      }
+    }
+
+    // bouton Être rappelé (toujours dispo)
+    const callBtn = document.createElement("button");
+    callBtn.textContent = "Être rappelé";
+    callBtn.style.background = "var(--accent)";
+    callBtn.style.borderColor = "var(--accent)";
+    callBtn.onclick = () => openModal(modalCallback);
+    ctas.appendChild(callBtn);
+
+    // handlers callback modal
+    document.getElementById("cancelCb").onclick = () => closeModal(modalCallback);
+    document.getElementById("saveCb").onclick = async () => {
+      const body = {
+        session_id: sid,
+        contact_name:  document.getElementById("cbName").value.trim() || null,
+        contact_phone: document.getElementById("cbPhone").value.trim() || null,
+        contact_email: document.getElementById("cbEmail").value.trim() || null
+      };
+      try {
+        await fetch("/api/leads/callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        closeModal(modalCallback);
+        alert("Merci ! On te rappelle rapidement.");
+      } catch {
+        alert("Désolé, l’enregistrement a échoué.");
+      }
+    };
+  }
+  </script>
+</body>
+</html>
