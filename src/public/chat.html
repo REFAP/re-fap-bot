@@ -92,11 +92,9 @@
   const btn   = document.getElementById("send");
   const ctas  = document.getElementById("ctas");
 
-  // modals
   const modalIntake = document.getElementById("modalIntake");
   const modalCallback = document.getElementById("modalCallback");
 
-  // session id simple (localStorage)
   const SID_KEY = "refap_sid";
   let sid = localStorage.getItem(SID_KEY);
   if (!sid) { sid = Math.random().toString(36).slice(2); localStorage.setItem(SID_KEY, sid); }
@@ -104,10 +102,8 @@
   function openModal(m){ m.classList.add("open"); }
   function closeModal(m){ m.classList.remove("open"); }
 
-  // on garde en mémoire ce que l’utilisateur a saisi dans la modale
   let lastLead = null;
 
-  // Construit une phrase de contexte injectée au prompt pour éviter de reposer les mêmes infos
   function buildLeadContext() {
     if (!lastLead) return "";
     const parts = [];
@@ -131,7 +127,6 @@
     log.textContent = "Toi: " + prompt;
     btn.disabled = true; state.textContent = "…";
 
-    // 1) ouvrir la modal intake (optionnelle)
     openModal(modalIntake);
 
     const doAfterIntake = async () => {
@@ -139,15 +134,14 @@
       const effectivePrompt = (ctx ? (ctx + "\n\n") : "") + prompt;
 
       try {
-        // 2) streaming pour le texte (UX fluide)
-        await streamAnswer(effectivePrompt);
+        await streamAnswer(effectivePrompt);   // ne rend QUE le texte
       } catch (err) {
         out.textContent = "Erreur: " + (err?.message || err);
       } finally {
         btn.disabled = false; state.textContent = "";
       }
 
-      // 3) en parallèle: appel non-stream pour récupérer payload (CTA + questions)
+      // une seule récupération du payload ici → pas de doublons
       try {
         const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(effectivePrompt)}`);
         if (r.ok) {
@@ -158,7 +152,6 @@
       } catch {}
     };
 
-    // handlers modal intake
     document.getElementById("skipIntake").onclick = () => { closeModal(modalIntake); doAfterIntake(); };
     document.getElementById("saveIntake").onclick = async () => {
       lastLead = {
@@ -183,12 +176,11 @@
     };
   });
 
-  // --- SSE robuste : watchdog + fallback non-stream
+  // --- SSE robuste : watchdog + fallback non-stream (texte seul)
   async function streamAnswer(prompt) {
     const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
     let received = false;
 
-    // Watchdog: si aucun token en 8 s → fallback
     const watchdogMs = 8000;
     let watchdog;
     const arm = (resolve, reject) => {
@@ -199,9 +191,7 @@
             const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
             const j = await r.json().catch(() => ({}));
             out.textContent = j?.text || out.textContent || "";
-            renderQuestions(j?.payload?.next_questions);
-            renderCTAs(j?.payload);
-            resolve();
+            resolve(); // CTA/questions seront rendus plus tard par doAfterIntake()
           } catch {
             reject(new Error("fallback_failed"));
           }
@@ -220,7 +210,6 @@
           if (o.delta) { out.textContent += o.delta; received = true; }
           if (o.done)  { es.close(); clearTimeout(watchdog); resolve(); return; }
         } catch {
-          // texte brut
           out.textContent += e.data;
           if (e.data && e.data.length) received = true;
         }
@@ -230,15 +219,12 @@
       es.onerror = async () => {
         es.close();
         clearTimeout(watchdog);
-        if (received) { resolve(); return; } // fermeture propre tolérée
-        // sinon, fallback non-stream
+        if (received) { resolve(); return; }
         try {
           const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
           const j = await r.json().catch(() => ({}));
           out.textContent = j?.text || out.textContent || "";
-          renderQuestions(j?.payload?.next_questions);
-          renderCTAs(j?.payload);
-          resolve();
+          resolve(); // CTA/questions rendus ensuite
         } catch {
           reject(new Error("sse_error_and_fallback_failed"));
         }
@@ -247,10 +233,22 @@
   }
 
   function renderQuestions(nextQuestions){
-    if (!Array.isArray(nextQuestions) || !nextQuestions.length) return;
+    if (!Array.isArray(nextQuestions)) return;
+    // dédup insensible à la casse
+    const seen = new Set();
+    const cleaned = nextQuestions
+      .map(s => String(s || "").trim())
+      .filter(Boolean)
+      .filter(q => {
+        const key = q.toLowerCase().replace(/\s+/g, " ");
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+    if (!cleaned.length) return;
+
     const ul = document.createElement("ul");
     ul.className = "questions";
-    nextQuestions.forEach(q => {
+    cleaned.forEach(q => {
       const li = document.createElement("li"); li.className = "ask"; li.textContent = q;
       ul.appendChild(li);
     });
@@ -259,24 +257,47 @@
 
   function renderCTAs(payload){
     if (!payload) return;
-    // CTAs proposés par le modèle/serveur
+
+    // helper dédup
+    const buttons = [];
+    const keys = new Set();
+    const pushBtn = (type, label, url, primary=false) => {
+      label = (label || "").trim();
+      const key = `${(type||"").toLowerCase()}|${label.toLowerCase()}`;
+      if (!label || keys.has(key)) return;
+      keys.add(key);
+
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.className = primary ? "" : "btn-outline";
+      if (primary) { b.style.background = "var(--accent)"; b.style.borderColor = "var(--accent)"; }
+      if (url) b.onclick = () => { window.location.href = url; };
+      buttons.push({ btn:b, rank: label.toLowerCase().includes("rdv") ? 0 : (label.toLowerCase().includes("rappel") ? 1 : 2) });
+    };
+
+    // 1) payload
     if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
-      for (const item of payload.cta.items.slice(0,2)) {
-        const b = document.createElement("button");
-        b.textContent = item.label || "Action";
-        b.className = "btn-outline";
-        b.onclick = () => { if (item.url) window.location.href = item.url; };
-        ctas.appendChild(b);
+      payload.cta.items.forEach(it => pushBtn(it.type, it.label, it.url, false));
+    }
+
+    // 2) bouton "Être rappelé" par défaut UNIQUEMENT s'il n'existe pas déjà
+    const hasCallback = Array.isArray(payload?.cta?.items) && payload.cta.items.some(it => (it.type||"").toLowerCase()==="callback" || /rappel/i.test(it?.label||""));
+    if (!hasCallback) {
+      const b = document.createElement("button");
+      b.textContent = "Être rappelé";
+      b.style.background = "var(--accent)";
+      b.style.borderColor = "var(--accent)";
+      b.onclick = () => openModal(modalCallback);
+      const key = "callback|être rappelé";
+      if (!keys.has(key)) {
+        keys.add(key);
+        buttons.push({ btn:b, rank: 1 });
       }
     }
 
-    // bouton Être rappelé (toujours dispo)
-    const callBtn = document.createElement("button");
-    callBtn.textContent = "Être rappelé";
-    callBtn.style.background = "var(--accent)";
-    callBtn.style.borderColor = "var(--accent)";
-    callBtn.onclick = () => openModal(modalCallback);
-    ctas.appendChild(callBtn);
+    // 3) tri & limite (2)
+    buttons.sort((a,b)=>a.rank-b.rank);
+    buttons.slice(0,2).forEach(({btn}) => ctas.appendChild(btn));
 
     // handlers callback modal
     document.getElementById("cancelCb").onclick = () => closeModal(modalCallback);
