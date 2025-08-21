@@ -137,20 +137,44 @@ app.get("/healthz", (_req, res) =>
   res.json({ status:"ok", model: OPENAI_MODEL, branch: process.env.RENDER_GIT_BRANCH || null })
 );
 
-// non-stream (aucun param non supporté)
+// ===== Diagnose (non-stream) avec payload JSON =====
 app.all("/api/diagnose", async (req, res) => {
   const promptRaw = pickPrompt(req);
-  if (!promptRaw) return res.status(400).json({ error:"MISSING_PROMPT" });
+  if (!promptRaw) return res.status(400).json({ error: "MISSING_PROMPT" });
 
-  const { detailed, prompt } = detectDetailModeAndClean(promptRaw);
+  // Si tu as déjà detectDetailModeAndClean, garde-le. Sinon, envoie promptRaw directement.
+  const userPrompt = promptRaw;
+
   try {
     const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
       messages: [
-        { role:"system", content: SYSTEM_PROMPT },
-        { role:"user", content: prompt }
+        { role: "system", content: SYSTEM_PROMPT },
+        // 👉 on ajoute l'instruction de payload UNIQUEMENT en non-stream
+        { role: "system", content: PAYLOAD_INSTRUCTION },
+        { role: "user", content: userPrompt }
       ]
     });
+
+    const raw = chat.choices?.[0]?.message?.content || "";
+    const payload = extractPayloadFromText(raw) || {
+      confidence: null,
+      probable_causes: [],
+      next_questions: [
+        "Marque, modèle, année/moteur ?",
+        "Kilométrage et type de trajets (courts/longs) ?",
+        "Ton code postal pour te proposer un garage proche ?"
+      ],
+      lead_missing: ["brand","model","year","engine","mileage_km","postal_code","contact"],
+      cta: { show: false, items: [] }
+    };
+    const text = stripPayloadBlock(raw);
+
+    res.json({ text: text.trim(), payload });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
     res.json({ text, mode: detailed ? "detailed" : "concise" });
   } catch (e) {
