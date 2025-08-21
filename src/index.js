@@ -20,6 +20,14 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
+function extractPayloadFromText(txt) {
+  const m = String(txt || "").match(/<PAYLOAD>([\s\S]*?)<\/PAYLOAD>/);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+function stripPayloadBlock(txt) {
+  return String(txt || "").replace(/<PAYLOAD>[\s\S]*?<\/PAYLOAD>/g, "").trim();
+}
 
 // perf réseau
 http.globalAgent.keepAlive = true;
