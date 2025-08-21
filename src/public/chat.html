@@ -29,7 +29,7 @@
         var(--bg);
       color:var(--fg);
       font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
-      padding:24px;
+      padding:24px 24px 130px; /* 👈 espace bas pour ne pas cacher “Envoyer” sous la barre sticky */
     }
 
     /* ========= Grille ========= */
@@ -44,9 +44,7 @@
     }
 
     /* ========= Titre / header ========= */
-    .header{
-      display:flex; align-items:center; gap:12px; margin-bottom:10px;
-    }
+    .header{display:flex; align-items:center; gap:12px; margin-bottom:10px;}
     .logo{
       display:inline-grid; place-items:center;
       width:42px;height:42px;border-radius:12px;
@@ -96,9 +94,7 @@
     .qtitle{color:#065f46;font-weight:800;margin:14px 0 6px}
 
     /* ========= État (en cours) ========= */
-    .status{
-      display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)
-    }
+    .status{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
     .dot{width:10px;height:10px;border-radius:50%;background:#cbd5e1}
     .dot.live{background:#22c55e; box-shadow:0 0 0 0 rgba(34,197,94,.7); animation:pulse 1.6s infinite}
     @keyframes pulse {
@@ -162,7 +158,7 @@
   </div>
 
   <!-- ==== Barre d’actions permanente ==== -->
-  <div class="sticky-wrap">
+  <div class="sticky-wrap" aria-hidden="false">
     <div class="stickybar">
       <div class="sb-left">
         <span class="hint">Besoin d’aide rapide ?</span>
@@ -214,7 +210,6 @@
   const modalIntake = document.getElementById("modalIntake");
   const modalCallback = document.getElementById("modalCallback");
   const stickyCallback = document.getElementById("stickyCallback");
-  const stickyBooking  = document.getElementById("stickyBooking");
   const statusDot  = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
 
@@ -429,41 +424,37 @@
 
   function renderCTAs(payload){
     if (!payload) return;
-    const buttons = [];
+
+    // On n’affiche ici que les “extras”. Les deux actions principales
+    // (RDV et Rappel) sont déjà disponibles en barre sticky.
+    const SKIP_BOOKING  = true;   // évite le doublon “Prendre RDV”
+    const SKIP_CALLBACK = true;   // évite le doublon “Être rappelé”
+
     const keys = new Set();
-    const pushBtn = (type, label, url, primary=false) => {
-      label = (label || "").trim();
-      const key = `${(type||"").toLowerCase()}|${label.toLowerCase()}`;
-      if (!label || keys.has(key)) return;
+    const pushEl = (el, label) => {
+      const key = (label||"").toLowerCase().trim();
+      if (!key || keys.has(key)) return;
       keys.add(key);
-      const el = document.createElement(url ? "a" : "button");
-      el.textContent = label;
-      el.className = primary ? "btn btn-accent" : "btn btn-outline";
-      if (url) { el.href = url; }
-      const rank = /rdv|diagnostic/i.test(label) ? 0 : (/rappel/i.test(label) ? 1 : 2);
-      buttons.push({ el, rank });
+      ctas.appendChild(el);
     };
 
     if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
-      payload.cta.items.forEach(it => pushBtn(it.type, it.label, it.url, false));
-    }
+      payload.cta.items.forEach(it => {
+        const type  = (it.type||"").toLowerCase();
+        const label = (it.label||"").trim();
+        const url   = it.url || null;
 
-    const hasCallback = Array.isArray(payload?.cta?.items) &&
-      payload.cta.items.some(it => (it.type||"").toLowerCase()==="callback" || /rappel/i.test(it?.label||""));
-    if (!hasCallback) {
-      const key = "callback|être rappelé";
-      if (!keys.has(key)) {
-        keys.add(key);
-        const b = document.createElement("button");
-        b.textContent = "Être rappelé";
-        b.className = "btn btn-ghost";
-        b.onclick = () => openModal(modalCallback);
-        buttons.push({ el:b, rank:1 });
-      }
-    }
+        const isBooking  = type==="booking"  || /rdv|diagnostic/i.test(label);
+        const isCallback = type==="callback" || /rappel/i.test(label);
+        if ((SKIP_BOOKING && isBooking) || (SKIP_CALLBACK && isCallback)) return;
 
-    buttons.sort((a,b)=>a.rank-b.rank);
-    buttons.slice(0,2).forEach(({el}) => ctas.appendChild(el));
+        const el = document.createElement(url ? "a" : "button");
+        el.textContent = label || "Action";
+        el.className = "btn btn-outline";
+        if (url) el.href = url;
+        pushEl(el, label);
+      });
+    }
   }
   </script>
 </body>
