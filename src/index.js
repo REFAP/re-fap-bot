@@ -27,6 +27,7 @@ const openai = new OpenAI({
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const OPENAI_TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE ?? 1);
 
 // DB
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -147,9 +148,18 @@ app.get("/api/admin/schema", async (_req, res) => {
 });
 
 app.post("/api/admin/rag/diagnose", async (req, res) => {
-  const { prompt = "Diagnostic rapide FAP : résume les étapes de contrôle.", temperature = 0.2 } = req.body || {};
-  try {
-    const chat = await openai.chat.completions.create({
+  const opts = {
+  model: OPENAI_MODEL,
+  messages: [
+    { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
+    { role: "user", content: prompt },
+  ],
+};
+// n'ajoute temperature que si ≠ 1
+if (OPENAI_TEMPERATURE !== 1) opts.temperature = OPENAI_TEMPERATURE;
+
+const chat = await openai.chat.completions.create(opts);
+
       model: OPENAI_MODEL,
       temperature,
       messages: [
@@ -199,7 +209,7 @@ app.get("/debug/stream", (req, res) => {
   const iv = setInterval(() => {
     i += 1;
     sseWrite(res, { delta: `tick-${i}` });
-    if (i >= 5) {
+    if (i >= 5) {	
       sseWrite(res, { done: true });
       clearInterval(iv);
       res.end();
@@ -255,13 +265,16 @@ async function handleDiagnoseStream(req, res) {
     const to = setTimeout(() => ac.abort("TIMEOUT"), timeoutMs);
 
     // Appel OpenAI en stream
-    const stream = await openai.chat.completions.create(
-      {
-        model: OPENAI_MODEL,
-        stream: true,
-        temperature: 0.2,
-        messages,
-      },
+   const opts = {
+  model: OPENAI_MODEL,
+  stream: true,
+  messages,
+};
+// n'ajoute temperature que si ≠ 1
+if (OPENAI_TEMPERATURE !== 1) opts.temperature = OPENAI_TEMPERATURE;
+
+const stream = await openai.chat.completions.create(opts);
+
       { signal: ac.signal }
     );
 
