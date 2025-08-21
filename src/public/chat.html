@@ -6,104 +6,208 @@
   <title>Re-FAP assistant</title>
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:24px;background:#fafafa;color:#111}
-    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;max-width:980px;margin:0 auto}
-    .bot{color:#059669;margin-bottom:12px}
-    .me{color:#111;margin:8px 0 16px}
-    textarea{width:100%;padding:14px;border:1px solid #d1d5db;border-radius:12px;font-size:16px}
+    .wrap{max-width:980px;margin:0 auto}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px}
+    textarea,input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px}
     button{padding:10px 16px;border:1px solid #111;border-radius:10px;background:#111;color:#fff;cursor:pointer}
     button:disabled{opacity:.6;cursor:not-allowed}
     pre{white-space:pre-wrap;word-wrap:break-word}
-    .hint{color:#6b7280;margin-top:10px;font-size:12px}
-    .err{color:#b91c1c;white-space:pre-wrap}
+    .row{display:flex;gap:10px}
+    .col{flex:1}
+    .hint{color:#6b7280;font-size:12px}
+    .cta{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+    /* Modal */
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:16px}
+    .modal.open{display:flex}
+    .modal .box{background:#fff;border-radius:12px;padding:20px;max-width:560px;width:100%;border:1px solid #e5e7eb}
+    .modal h3{margin-top:0}
+    .modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="bot">Bot: Salut ! Décris ton symptôme et je t’aide à diagnostiquer.</div>
-    <div id="log" class="me"></div>
-    <pre id="output"></pre>
+  <div class="wrap">
+    <div class="card">
+      <h2>Re-FAP assistant</h2>
+      <div id="log" class="hint"></div>
+      <pre id="output"></pre>
+      <div id="ctas" class="cta"></div>
 
-    <form id="f" style="margin-top:16px">
-      <textarea id="q" rows="3" placeholder="Décris le symptôme..."></textarea>
-      <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
-        <button id="send" type="submit">Envoyer</button>
-        <span id="state" class="hint"></span>
+      <form id="f" style="margin-top:16px">
+        <textarea id="q" rows="3" placeholder="Décris le symptôme..."></textarea>
+        <div class="row" style="margin-top:10px;align-items:center">
+          <div class="col"><span id="state" class="hint"></span></div>
+          <button id="send" type="submit">Envoyer</button>
+        </div>
+      </form>
+      <div class="hint" style="margin-top:6px">
+        Le texte arrive en streaming. Les boutons (CTA) apparaissent ensuite.
       </div>
-    </form>
+    </div>
+  </div>
 
-    <div class="hint">
-      Streaming via <code>/api/diagnose/stream</code> (GET SSE).
-      Si le streaming n’est pas dispo, on bascule automatiquement en réponse non-stream (<code>/api/diagnose</code>).
+  <!-- Modal 1: Infos véhicule -->
+  <div class="modal" id="modalIntake">
+    <div class="box">
+      <h3>Quelques infos (optionnel)</h3>
+      <div class="row"><div class="col"><input id="brand"  placeholder="Marque"></div><div class="col"><input id="model" placeholder="Modèle"></div></div>
+      <div class="row" style="margin-top:8px"><div class="col"><input id="engine" placeholder="Moteur (ex: 1.6 HDi)"></div><div class="col"><input id="year" placeholder="Année-modèle (ex: 2015)"></div></div>
+      <div class="row" style="margin-top:8px"><div class="col"><input id="dtc" placeholder="Code erreur OBD (DTC) si connu"></div><div class="col"><input id="postal" placeholder="Code postal"></div></div>
+      <div style="margin-top:8px"><textarea id="notes" rows="2" placeholder="Observations (facultatif)"></textarea></div>
+      <div class="actions">
+        <button type="button" id="skipIntake" style="background:#6b7280;border-color:#6b7280">Ignorer</button>
+        <button type="button" id="saveIntake">Enregistrer</button>
+      </div>
+      <div class="hint">Ces infos nous aident à affiner le diagnostic et à te proposer un garage proche. Tu peux ignorer.</div>
+    </div>
+  </div>
+
+  <!-- Modal 2: Être rappelé -->
+  <div class="modal" id="modalCallback">
+    <div class="box">
+      <h3>Être rappelé par un conseiller</h3>
+      <div class="row"><div class="col"><input id="cbName" placeholder="Nom"></div><div class="col"><input id="cbPhone" placeholder="Téléphone"></div></div>
+      <div class="row" style="margin-top:8px"><div class="col"><input id="cbEmail" placeholder="Email"></div></div>
+      <div class="actions">
+        <button type="button" id="cancelCb" style="background:#6b7280;border-color:#6b7280">Annuler</button>
+        <button type="button" id="saveCb">Envoyer</button>
+      </div>
+      <div class="hint">On t’appelle rapidement pour caler un rendez-vous avec un garage partenaire sérieux.</div>
     </div>
   </div>
 
   <script>
-  const out = document.getElementById("output");
-  const log = document.getElementById("log");
+  const out   = document.getElementById("output");
+  const log   = document.getElementById("log");
   const state = document.getElementById("state");
-  const form = document.getElementById("f");
-  const q = document.getElementById("q");
-  const btn = document.getElementById("send");
+  const form  = document.getElementById("f");
+  const q     = document.getElementById("q");
+  const btn   = document.getElementById("send");
+  const ctas  = document.getElementById("ctas");
+
+  // modals
+  const modalIntake = document.getElementById("modalIntake");
+  const modalCallback = document.getElementById("modalCallback");
+
+  // session id simple (localStorage)
+  const SID_KEY = "refap_sid";
+  let sid = localStorage.getItem(SID_KEY);
+  if (!sid) { sid = Math.random().toString(36).slice(2); localStorage.setItem(SID_KEY, sid); }
+
+  function openModal(m){ m.classList.add("open"); }
+  function closeModal(m){ m.classList.remove("open"); }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const prompt = q.value.trim();
     if (!prompt) return;
     out.textContent = "";
+    ctas.innerHTML = "";
     log.textContent = "Toi: " + prompt;
-    btn.disabled = true;
-    state.textContent = "…";
+    btn.disabled = true; state.textContent = "…";
 
-    try {
-      await diagnose(prompt);
-    } catch (err) {
-      out.innerHTML = `<span class="err">Erreur: ${err?.message || err}</span>`;
-    } finally {
-      btn.disabled = false;
-      state.textContent = "";
-    }
+    // 1) ouvrir la modal intake (optionnelle)
+    openModal(modalIntake);
+
+    const doAfterIntake = async () => {
+      try {
+        // 2) streaming pour le texte (UX fluide)
+        await streamAnswer(prompt);
+      } catch (err) {
+        out.textContent = "Erreur: " + (err?.message || err);
+      } finally {
+        btn.disabled = false; state.textContent = "";
+      }
+
+      // 3) en parallèle: appel non-stream pour récupérer payload (CTA)
+      try {
+        const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
+        if (r.ok) {
+          const j = await r.json();
+          renderCTAs(j?.payload);
+        }
+      } catch {}
+    };
+
+    // boutons modal intake
+    document.getElementById("skipIntake").onclick = () => { closeModal(modalIntake); doAfterIntake(); };
+    document.getElementById("saveIntake").onclick = async () => {
+      const body = {
+        session_id: sid,
+        brand:  document.getElementById("brand").value.trim() || null,
+        model:  document.getElementById("model").value.trim() || null,
+        engine: document.getElementById("engine").value.trim() || null,
+        year:   document.getElementById("year").value.trim() || null,
+        dtc:    document.getElementById("dtc").value.trim() || null,
+        notes:  document.getElementById("notes").value.trim() || null,
+        postal_code: document.getElementById("postal").value.trim() || null
+      };
+      try {
+        await fetch("/api/leads/intake", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+      } catch {}
+      closeModal(modalIntake);
+      doAfterIntake();
+    };
   });
 
-  async function diagnose(prompt) {
-    // 1) Essai streaming SSE (GET avec ?prompt=...)
+  async function streamAnswer(prompt) {
     const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
-    try {
-      await new Promise((resolve, reject) => {
-        const es = new EventSource(url);
-        es.onmessage = (e) => {
-          // Le serveur envoie {delta: "..."} ou du texte brut; gérons les deux.
-          try {
-            const o = JSON.parse(e.data);
-            if (o.delta) out.textContent += o.delta;
-            else if (o.error) { es.close(); reject(new Error(o.error)); }
-            else if (typeof o === "string") out.textContent += o;
-          } catch {
-            out.textContent += e.data;
-          }
+    await new Promise((resolve, reject) => {
+      const es = new EventSource(url);
+      es.onmessage = (e) => {
+        try { const o = JSON.parse(e.data); if (o.delta) out.textContent += o.delta; else out.textContent += e.data; }
+        catch { out.textContent += e.data; }
+      };
+      es.addEventListener("done", () => { es.close(); resolve(); });
+      es.onerror = () => { es.close(); reject(new Error("sse_error")); };
+    });
+  }
+
+  function renderCTAs(payload){
+    if (!payload) return;
+    // boutons CTA
+    ctas.innerHTML = "";
+    if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
+      for (const item of payload.cta.items.slice(0,2)) {
+        const b = document.createElement("button");
+        b.textContent = item.label || "Action";
+        b.onclick = () => {
+          if (item.url) window.location.href = item.url;
         };
-        es.addEventListener("done", () => { es.close(); resolve(); });
-        es.onerror = () => { es.close(); reject(new Error("sse_error")); };
-      });
-      return;
-    } catch (_) {
-      // 2) Fallback non-stream propre: POST sur /api/diagnose (plus /api/admin/rag/diagnose)
-      const r = await fetch("/api/diagnose", {
-        method: "POST",
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: prompt
-      });
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(`HTTP ${r.status}: ${txt}`);
-      }
-      const ct = r.headers.get("content-type") || "";
-      if (ct.includes("application/json")) {
-        const j = await r.json();
-        out.textContent = j.text || JSON.stringify(j);
-      } else {
-        out.textContent = await r.text();
+        ctas.appendChild(b);
       }
     }
+    // bouton Être rappelé (toujours dispo en plus)
+    const callBtn = document.createElement("button");
+    callBtn.textContent = "Être rappelé";
+    callBtn.style.background = "#0b5";
+    callBtn.onclick = () => openModal(modalCallback);
+    ctas.appendChild(callBtn);
+
+    // handlers callback modal
+    document.getElementById("cancelCb").onclick = () => closeModal(modalCallback);
+    document.getElementById("saveCb").onclick = async () => {
+      const body = {
+        session_id: sid,
+        contact_name:  document.getElementById("cbName").value.trim() || null,
+        contact_phone: document.getElementById("cbPhone").value.trim() || null,
+        contact_email: document.getElementById("cbEmail").value.trim() || null
+      };
+      try {
+        await fetch("/api/leads/callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        closeModal(modalCallback);
+        alert("Merci ! On te rappelle rapidement.");
+      } catch {
+        alert("Désolé, l’enregistrement a échoué.");
+      }
+    };
   }
   </script>
 </body>
