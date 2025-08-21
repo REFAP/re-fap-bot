@@ -1,4 +1,4 @@
-// index.js
+// src/index.js
 // ======== BOOT ========
 import "dotenv/config";
 import path from "node:path";
@@ -21,15 +21,14 @@ console.log(`[BOOT] cwd=${process.cwd()}`);
 // ======== CONFIG / ENV ========
 const PORT = Number(process.env.PORT || 3000);
 
-// OpenAI
+// OpenAI (on NE JAMAIS envoie 'temperature')
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const OPENAI_TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE ?? 1);
 
-// DB
+// DB (optionnelle)
 const DATABASE_URL = process.env.DATABASE_URL;
 let pool = null;
 if (!DATABASE_URL) {
@@ -45,7 +44,6 @@ if (!DATABASE_URL) {
 }
 
 // ======== PERF RÉSEAU ========
-// Garde les connexions HTTP/HTTPS ouvertes → latence ↓
 http.globalAgent.keepAlive = true;
 https.globalAgent.keepAlive = true;
 
@@ -54,10 +52,8 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-// Permettre POST texte brut pour nos tests tolérants
 app.use(express.text({ type: "text/*", limit: "1mb" }));
-
-// Ne PAS compresser le SSE, sinon certaines stacks reset la connexion
+// Pas de compression pour SSE
 app.use(
   compression({
     filter: (req, res) => {
@@ -68,18 +64,8 @@ app.use(
     },
   })
 );
-// ======== HEALTHCHECK ========
-app.get("/healthz", (_req, res) => {
-  console.log("[HEALTHZ] hit");
-  res.status(200).json({
-    status: "ok",
-    uptime: process.uptime(),
-    port: PORT,
-    db: pool ? "configured" : "disabled",
-  });
-});
 
-// ======== MINI-CACHE TTL (mémoire) ========
+// ======== MINI-CACHE TTL ========
 const _cache = new Map();
 function cacheGet(k) {
   const h = _cache.get(k);
@@ -92,7 +78,6 @@ function cacheGet(k) {
   return value;
 }
 function cacheSet(k, v, ttlMs = 10 * 60 * 1000) {
-  // 10 min par défaut
   _cache.set(k, { value: v, exp: Date.now() + ttlMs });
 }
 function norm(s) {
@@ -105,27 +90,36 @@ function sseWrite(res, payload) {
 }
 function sseHeartbeat(res) {
   res.write(`:hb ${Date.now()}\n\n`);
-} // commentaire SSE
+}
 
-// ======== HEALTHCHECK ========
-// ======== HEALTHCHECK ========
-app.get("/healthz", (_req, res) => {
-  res.status(200).json({
+// ======== HEALTHCHECK (toujours 200) ========
+app.get("/healthz", async (_req, res) => {
+  const payload = {
     status: "ok",
     uptime: process.uptime(),
     port: PORT,
-    db: pool ? "configured" : "disabled", // purement informatif
-  });
+    db: pool ? "configured" : "missing",
+  };
+  if (pool) {
+    try {
+      await pool.query("select 1");
+      payload.db_ok = true;
+    } catch {
+      payload.db_ok = false;
+    }
+  }
+  return res.status(200).json(payload);
 });
 
-// ======== STATIC (optionnel) ========
+// ======== STATIC ========
 app.use(express.static(path.join(__dirname, "public")));
 
-// ======== ADMIN (stubs utiles) ========
+// ======== ADMIN ========
 app.get("/api/admin/guess", (_req, res) => {
   res.json({
     ok: true,
     model: OPENAI_MODEL,
+    temperatureSent: false, // on ne l’envoie jamais
     db: Boolean(pool),
     time: new Date().toISOString(),
   });
@@ -148,20 +142,10 @@ app.get("/api/admin/schema", async (_req, res) => {
 });
 
 app.post("/api/admin/rag/diagnose", async (req, res) => {
-  const opts = {
-  model: OPENAI_MODEL,
-  messages: [
-    { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
-    { role: "user", content: prompt },
-  ],
-};
-// n'ajoute temperature que si ≠ 1
-if (OPENAI_TEMPERATURE !== 1) opts.temperature = OPENAI_TEMPERATURE;
-
-const chat = await openai.chat.completions.create(opts);
-
+  const { prompt = "Diagnostic rapide FAP : résume les étapes de contrôle." } = req.body || {};
+  try {
+    const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      temperature,
       messages: [
         { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
         { role: "user", content: prompt },
@@ -170,17 +154,14 @@ const chat = await openai.chat.completions.create(opts);
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
     res.json({ text });
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+    const msg = e?.response?.data || e?.message || String(e);
+    res.status(500).json({ error: msg });
   }
 });
 
-// ======== HELPERS PARSING MESSAGES (tolérant) ========
+// ======== PARSING (tolérant) ========
 function parseMessages(req) {
-  // 1) JSON { messages: [...] }
-  if (req.is("application/json") && Array.isArray(req.body?.messages)) {
-    return req.body.messages;
-  }
-  // 2) GET ?q=...
+  if (req.is("application/json") && Array.isArray(req.body?.messages)) return req.body.messages;
   const q = (req.query?.q ?? "").toString().trim();
   if (q) {
     return [
@@ -188,7 +169,6 @@ function parseMessages(req) {
       { role: "user", content: q },
     ];
   }
-  // 3) POST texte brut
   if (typeof req.body === "string" && req.body.trim()) {
     return [
       { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
@@ -198,18 +178,19 @@ function parseMessages(req) {
   return [];
 }
 
-// ======== DEBUG: STREAM SANS OPENAI ========
+// ======== DEBUG SSE (sans OpenAI) ========
 app.get("/debug/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
   let i = 0;
   const iv = setInterval(() => {
     i += 1;
     sseWrite(res, { delta: `tick-${i}` });
-    if (i >= 5) {	
+    if (i >= 5) {
       sseWrite(res, { done: true });
       clearInterval(iv);
       res.end();
@@ -220,15 +201,13 @@ app.get("/debug/stream", (req, res) => {
 });
 
 // ======== STREAMING DIAGNOSE (SSE) ========
-// POST (JSON ou texte) + GET (?q=...) → même logique.
 async function handleDiagnoseStream(req, res) {
-  // Headers SSE
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
-  // Heartbeat pour garder la connexion ouverte (Render/Proxies)
   const hb = setInterval(() => sseHeartbeat(res), 15_000);
   req.on("close", () => clearInterval(hb));
 
@@ -240,16 +219,13 @@ async function handleDiagnoseStream(req, res) {
       return res.end();
     }
 
-    // --- Cache: clé = messages normalisés ---
+    // Cache
     const cacheKey = norm(JSON.stringify(messages));
     const cacheTtl = Number(process.env.STREAM_CACHE_TTL_MS || 10 * 60 * 1000);
-
-    // Hit cache → rejouer immédiatement (UX rapide)
     const cached = cacheGet(cacheKey);
     if (cached) {
-      if (cached.length <= 400) {
-        sseWrite(res, { delta: cached });
-      } else {
+      if (cached.length <= 400) sseWrite(res, { delta: cached });
+      else {
         const mid = Math.floor(cached.length / 2);
         sseWrite(res, { delta: cached.slice(0, mid) });
         sseWrite(res, { delta: cached.slice(mid) });
@@ -259,27 +235,22 @@ async function handleDiagnoseStream(req, res) {
       return res.end();
     }
 
-    // --- Timeout dur sur l’appel modèle ---
+    // Timeout dur
     const timeoutMs = Number(process.env.STREAM_TIMEOUT_MS || 15_000);
     const ac = new AbortController();
     const to = setTimeout(() => ac.abort("TIMEOUT"), timeoutMs);
 
-    // Appel OpenAI en stream
-   const opts = {
-  model: OPENAI_MODEL,
-  stream: true,
-  messages,
-};
-// n'ajoute temperature que si ≠ 1
-if (OPENAI_TEMPERATURE !== 1) opts.temperature = OPENAI_TEMPERATURE;
-
-const stream = await openai.chat.completions.create(opts);
-
+    // Appel OpenAI en stream (SANS temperature)
+    const stream = await openai.chat.completions.create(
+      {
+        model: OPENAI_MODEL,
+        stream: true,
+        messages,
+      },
       { signal: ac.signal }
     );
 
     let fullText = "";
-
     for await (const chunk of stream) {
       const delta = chunk?.choices?.[0]?.delta?.content || "";
       if (delta) {
@@ -287,18 +258,15 @@ const stream = await openai.chat.completions.create(opts);
         sseWrite(res, { delta });
       }
     }
-
     clearTimeout(to);
 
-    if (fullText && fullText.trim().length > 0) {
-      cacheSet(cacheKey, fullText, cacheTtl);
-    }
+    if (fullText && fullText.trim().length > 0) cacheSet(cacheKey, fullText, cacheTtl);
 
     sseWrite(res, { done: true });
     clearInterval(hb);
     return res.end();
   } catch (e) {
-    const msg = e?.message ? String(e.message) : String(e);
+    const msg = e?.response?.data?.error?.message || e?.message || String(e);
     sseWrite(res, { error: msg });
     clearInterval(hb);
     return res.end();
