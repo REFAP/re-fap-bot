@@ -1,4 +1,5 @@
 // src/index.js
+// ======== BOOT ========
 import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,22 +12,23 @@ import cors from "cors";
 import OpenAI from "openai";
 import { Pool } from "pg";
 
-// ---------- BOOT ----------
+// --- Boot logs courts (pas de secrets) ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 console.log(`[BOOT] file=${__filename}`);
 console.log(`[BOOT] cwd=${process.cwd()}`);
 
+// ======== CONFIG ========
 const PORT = Number(process.env.PORT || 3000);
 
-// ---------- OpenAI ----------
+// OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-// ---------- DB (facultatif) ----------
+// DB (facultatif)
 const DATABASE_URL = process.env.DATABASE_URL;
 let pool = null;
 if (!DATABASE_URL) {
@@ -41,59 +43,98 @@ if (!DATABASE_URL) {
   });
 }
 
-// ---------- perf réseau ----------
+// ======== PERF RÉSEAU ========
 http.globalAgent.keepAlive = true;
 https.globalAgent.keepAlive = true;
 
-// ---------- APP ----------
+// ======== APP ========
 const app = express();
 app.use(cors());
 
-// ne compresse pas le SSE
+// ⚠️ Pas de json() global → on prend tout en texte brut et on parse nous-mêmes.
+//   Ça élimine les “Bad Request” d’Express si le JSON n’est pas exactement comme il aime.
+app.use(express.text({ type: "*/*", limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+// Ne PAS compresser le SSE
 app.use(
   compression({
     filter: (req, res) => {
-      const a = req.headers["accept"] || "";
-      const c = req.headers["content-type"] || "";
-      if (a.includes("text/event-stream") || c.includes("text/event-stream")) return false;
+      const accept = req.headers["accept"] || "";
+      const ctype = req.headers["content-type"] || "";
+      if (accept.includes("text/event-stream") || ctype.includes("text/event-stream")) return false;
       return compression.filter(req, res);
     },
   })
 );
 
-// JSON tolérant
-function safeJson(limit = "1mb") {
-  const parser = express.json({ limit, strict: false, type: ["application/json", "application/*+json"] });
-  return (req, res, next) => {
-    parser(req, res, (err) => {
-      if (err) {
-        req._json_error = String(err.message || err);
-        req.body = undefined;
-      }
-      next();
-    });
-  };
-}
-app.use(safeJson());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.text({ type: "text/*", limit: "1mb" }));
-
-// ---------- mini-cache ----------
+// ======== MINI-CACHE TTL (mémoire) ========
 const _cache = new Map();
-const cacheGet = (k) => {
+function cacheGet(k) {
   const h = _cache.get(k);
   if (!h) return null;
-  if (Date.now() > h.exp) { _cache.delete(k); return null; }
-  return h.value;
-};
-const cacheSet = (k, v, ttlMs = 10 * 60 * 1000) => _cache.set(k, { value: v, exp: Date.now() + ttlMs });
-const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const { value, exp } = h;
+  if (Date.now() > exp) { _cache.delete(k); return null; }
+  return value;
+}
+function cacheSet(k, v, ttlMs = 10 * 60 * 1000) { _cache.set(k, { value: v, exp: Date.now() + ttlMs }); }
+function norm(s) { return (s || "").trim().toLowerCase().replace(/\s+/g, " "); }
 
-// ---------- utils SSE ----------
-const sseWrite = (res, payload) => res.write(`data:${JSON.stringify(payload)}\n\n`);
-const sseHeartbeat = (res) => res.write(`:hb ${Date.now()}\n\n`);
+// ======== UTILS ========
+function tryParseJSON(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
 
-// ---------- health ----------
+function pickPrompt(req) {
+  // 1) GET ?prompt
+  if (req.query?.prompt) return String(req.query.prompt);
+
+  // 2) POST/TEXT: JSON ou texte brut
+  if (typeof req.body === "string" && req.body.length) {
+    const maybe = tryParseJSON(req.body);
+    if (maybe && typeof maybe === "object" && typeof maybe.prompt === "string") return maybe.prompt;
+    // sinon on prend le texte brut directement
+    return req.body;
+  }
+
+  // 3) application/x-www-form-urlencoded
+  if (req.body && typeof req.body === "object" && req.body.prompt) return String(req.body.prompt);
+
+  return "";
+}
+
+function pickMessages(req) {
+  // Accepte:
+  //  - GET ?q=...
+  //  - POST body texte brut: {"messages":[...]} ou juste le texte
+  //  - POST form urlencoded (rare)
+  const q = (req.query?.q ?? "").toString().trim();
+  if (q) {
+    return [
+      { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
+      { role: "user", content: q },
+    ];
+  }
+
+  if (typeof req.body === "string" && req.body.length) {
+    const maybe = tryParseJSON(req.body);
+    if (maybe && Array.isArray(maybe.messages)) return maybe.messages;
+    // si c'est juste du texte on en fait un prompt
+    return [
+      { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
+      { role: "user", content: req.body.trim() },
+    ];
+  }
+
+  if (req.body && Array.isArray(req.body.messages)) return req.body.messages;
+
+  return [];
+}
+
+function sseWrite(res, payload) { res.write(`data:${JSON.stringify(payload)}\n\n`); }
+function sseHeartbeat(res) { res.write(`:hb ${Date.now()}\n\n`); }
+
+// ======== HEALTH ========
 app.get("/healthz", async (_req, res) => {
   const base = { status: "ok", uptime: process.uptime(), port: PORT, db: pool ? "configuré" : "non_configuré" };
   if (!pool) return res.json({ ...base, db_ok: false });
@@ -101,7 +142,7 @@ app.get("/healthz", async (_req, res) => {
   catch { res.json({ ...base, db_ok: false }); }
 });
 
-// ---------- statiques + landing ----------
+// ======== STATIC + LANDING ========
 app.use(express.static(path.join(__dirname, "public")));
 app.get("/", (_req, res) => {
   res.type("html").send(`<!doctype html><meta charset="utf-8">
@@ -115,7 +156,7 @@ app.get("/", (_req, res) => {
 </ul>`);
 });
 
-// ---------- admin stubs ----------
+// ======== ADMIN (stubs utiles) ========
 app.get("/api/admin/guess", (_req, res) => {
   res.json({ ok: true, model: OPENAI_MODEL, db: Boolean(pool), time: new Date().toISOString() });
 });
@@ -127,7 +168,8 @@ app.get("/api/admin/schema", async (_req, res) => {
       select table_schema, table_name
       from information_schema.tables
       where table_type='BASE TABLE' and table_schema not in ('pg_catalog','information_schema')
-      order by table_schema, table_name;`;
+      order by table_schema, table_name;
+    `;
     const { rows } = await pool.query(q);
     res.json({ tables: rows });
   } catch (e) {
@@ -135,51 +177,11 @@ app.get("/api/admin/schema", async (_req, res) => {
   }
 });
 
-// ---------- helpers prompt/messages ----------
-function parsePrompt(req) {
-  if (req?.body && typeof req.body === "object" && req.body.prompt) return String(req.body.prompt);
-  if (typeof req.body === "string" && req.body.trim()) return req.body.trim();
-  if (req.query?.prompt) return String(req.query.prompt);
-  return "";
-}
-function parseMessages(req) {
-  const q = (req.query?.q ?? "").toString().trim();
-  if (req.is("application/json") && Array.isArray(req.body?.messages)) return req.body.messages;
-  if (q) return [
-    { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
-    { role: "user", content: q },
-  ];
-  if (typeof req.body === "string" && req.body.trim()) return [
-    { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
-    { role: "user", content: req.body.trim() },
-  ];
-  return [];
-}
-
-// ---------- ADMIN DIAGNOSE (non-stream) ----------
-const adminDiagnose = async (req, res) => {
-  const prompt = parsePrompt(req);
-  if (!prompt) return res.status(400).json({ error: "MISSING_PROMPT", note: 'Envoyez {"prompt":"..."} ou ?prompt=...' });
-  try {
-    const chat = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: [
-        { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
-        { role: "user", content: prompt },
-      ],
-    });
-    const text = chat.choices?.[0]?.message?.content?.trim() || "";
-    res.json({ text });
-  } catch (e) {
-    res.status(500).json({ error: e?.message ? String(e.message) : String(e) });
-  }
-};
-app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], adminDiagnose);
-
-// ---------- DIAGNOSE (non-stream, pour le front) ----------
+// ======== DIAGNOSE (non-stream, robuste) ========
 app.all("/api/diagnose", async (req, res) => {
-  const prompt = parsePrompt(req);
-  if (!prompt) return res.status(400).json({ error: "MISSING_PROMPT" });
+  const prompt = pickPrompt(req);
+  if (!prompt) return res.status(400).json({ error: "MISSING_PROMPT", hint: 'POST texte brut {"prompt":"..."} ou GET ?prompt=...' });
+
   try {
     const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
@@ -195,22 +197,44 @@ app.all("/api/diagnose", async (req, res) => {
   }
 });
 
-// ---------- DEBUG SSE ----------
+// ======== ADMIN DIAGNOSE (alias non-stream) ========
+app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => {
+  const prompt = pickPrompt(req);
+  if (!prompt) return res.status(400).json({ error: "MISSING_PROMPT" });
+
+  try {
+    const chat = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [
+        { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
+        { role: "user", content: prompt },
+      ],
+    });
+    const text = chat.choices?.[0]?.message?.content?.trim() || "";
+    res.json({ text });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ? String(e.message) : String(e) });
+  }
+});
+
+// ======== DEBUG: STREAM SANS OPENAI ========
 app.get("/debug/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
+
   let i = 0;
   const iv = setInterval(() => {
     i += 1;
     sseWrite(res, { delta: `tick-${i}` });
     if (i >= 5) { sseWrite(res, { done: true }); clearInterval(iv); res.end(); }
   }, 400);
+
   req.on("close", () => clearInterval(iv));
 });
 
-// ---------- DIAGNOSE SSE ----------
+// ======== DIAGNOSE (SSE) ========
 async function handleDiagnoseStream(req, res) {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -221,12 +245,13 @@ async function handleDiagnoseStream(req, res) {
   req.on("close", () => clearInterval(hb));
 
   try {
-    const messages = parseMessages(req);
+    const messages = pickMessages(req);
     if (!messages.length) { sseWrite(res, { error: "MISSING_MESSAGES" }); clearInterval(hb); return res.end(); }
 
     const cacheKey = norm(JSON.stringify(messages));
-    const cached = cacheGet(cacheKey);
     const cacheTtl = Number(process.env.STREAM_CACHE_TTL_MS || 10 * 60 * 1000);
+
+    const cached = cacheGet(cacheKey);
     if (cached) {
       if (cached.length <= 400) sseWrite(res, { delta: cached });
       else { const mid = Math.floor(cached.length / 2); sseWrite(res, { delta: cached.slice(0, mid) }); sseWrite(res, { delta: cached.slice(mid) }); }
@@ -246,6 +271,7 @@ async function handleDiagnoseStream(req, res) {
       const delta = chunk?.choices?.[0]?.delta?.content || "";
       if (delta) { fullText += delta; sseWrite(res, { delta }); }
     }
+
     clearTimeout(to);
     if (fullText.trim()) cacheSet(cacheKey, fullText, cacheTtl);
 
@@ -261,21 +287,19 @@ async function handleDiagnoseStream(req, res) {
 app.post("/api/diagnose/stream", handleDiagnoseStream);
 app.get("/api/diagnose/stream", handleDiagnoseStream);
 
-// ---------- START ----------
+// ======== START ========
 (async () => {
   if (pool) {
     try {
       const { rows } = await pool.query("select current_database() as db, current_user as user");
       const db = rows?.[0]?.db || "postgres";
       const usr = rows?.[0]?.user || "unknown";
-      const host = (() => {
-        try { const u = new URL(DATABASE_URL); return `${u.hostname}:${u.port || 5432}`; }
-        catch { return "db"; }
-      })();
+      const host = (() => { try { const u = new URL(DATABASE_URL); return `${u.hostname}:${u.port || 5432}`; } catch { return "db"; } })();
       console.log(`✅ PostgreSQL OK | DB: ${db} | host: ${host} | user: ${usr}`);
     } catch (e) {
       console.warn("⚠️  PostgreSQL init warning:", e.message || e);
     }
   }
-  app.listen(PORT, () => console.log(`🚀 Server up on :${PORT}`));
+
+  app.listen(PORT, () => { console.log(`🚀 Server up on :${PORT}`); });
 })();
