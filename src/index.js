@@ -10,13 +10,11 @@ import compression from "compression";
 import cors from "cors";
 import OpenAI from "openai";
 
-// --- Boot ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 3000);
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const TEMPERATURE  = Number(process.env.TEMPERATURE || 0.2);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -32,14 +30,16 @@ const app = express();
 app.use(cors());
 app.use(express.text({ type: "*/*", limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(compression({
-  filter: (req, res) => {
-    const accept = req.headers["accept"] || "";
-    const ctype = req.headers["content-type"] || "";
-    if (accept.includes("text/event-stream") || ctype.includes("text/event-stream")) return false;
-    return compression.filter(req, res);
-  },
-}));
+app.use(
+  compression({
+    filter: (req, res) => {
+      const accept = req.headers["accept"] || "";
+      const ctype = req.headers["content-type"] || "";
+      if (accept.includes("text/event-stream") || ctype.includes("text/event-stream")) return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 
 // utils
 function tryParseJSON(str){ try { return JSON.parse(str); } catch { return null; } }
@@ -76,12 +76,14 @@ Structure en 4 blocs:
 2) Vérifs prioritaires (3–5 puces)
 3) Actions immédiates (3–5 puces)
 4) Quand passer à la valise (1–2 lignes)
-Si l'utilisateur demande des "détails", tu peux développer, sinon reste concis.`;
+Si l'utilisateur demande des "détails", développe; sinon reste concis.`;
 
 // health
-app.get("/healthz", (_req, res) => res.json({ status:"ok", model: OPENAI_MODEL }));
+app.get("/healthz", (_req, res) =>
+  res.json({ status:"ok", model: OPENAI_MODEL, branch: process.env.RENDER_GIT_BRANCH || null })
+);
 
-// non-stream
+// non-stream (aucun param non supporté)
 app.all("/api/diagnose", async (req, res) => {
   const promptRaw = pickPrompt(req);
   if (!promptRaw) return res.status(400).json({ error:"MISSING_PROMPT" });
@@ -90,8 +92,6 @@ app.all("/api/diagnose", async (req, res) => {
   try {
     const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      temperature: TEMPERATURE,
-      // ⛔️ PAS de max_tokens / max_completion_tokens ici
       messages: [
         { role:"system", content: SYSTEM_PROMPT },
         { role:"user", content: prompt }
@@ -104,7 +104,7 @@ app.all("/api/diagnose", async (req, res) => {
   }
 });
 
-// stream
+// stream (aucun param non supporté)
 async function handleDiagnoseStream(req, res){
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -123,9 +123,7 @@ async function handleDiagnoseStream(req, res){
 
     const stream = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      temperature: TEMPERATURE,
       stream: true,
-      // ⛔️ PAS de max_tokens / max_completion_tokens ici
       messages: [
         { role:"system", content: SYSTEM_PROMPT },
         { role:"user", content: prompt }
