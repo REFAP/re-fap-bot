@@ -9,17 +9,60 @@ import express from "express";
 import compression from "compression";
 import cors from "cors";
 import OpenAI from "openai";
+import { Pool } from "pg";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 3000);
-
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
+// ---------- OpenAI ----------
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
+
+// ---------- PostgreSQL (optionnel) ----------
+const DATABASE_URL = process.env.DATABASE_URL;
+let pool = null;
+if (!DATABASE_URL) {
+  console.warn("⚠️  DATABASE_URL manquant : les endpoints /api/leads/* répondent 503.");
+} else {
+  pool = new Pool({
+    connectionString: DATABASE_URL,
+    max: 10,
+    idleTimeoutMillis: 30_000,
+    allowExitOnIdle: false,
+    ssl: DATABASE_URL.includes("supabase") ? { rejectUnauthorized: false } : undefined,
+  });
+  // Création table minimale si absente
+  (async () => {
+    try {
+      await pool.query(`
+        create table if not exists leads (
+          id bigserial primary key,
+          created_at timestamptz default now(),
+          session_id text,
+          brand text,
+          model text,
+          engine text,
+          year text,
+          dtc text,
+          notes text,
+          postal_code text,
+          source text,
+          contact_name text,
+          contact_phone text,
+          contact_email text
+        );
+        create index if not exists leads_created_at_idx on leads(created_at);
+      `);
+      console.log("✅ DB prête (table leads).");
+    } catch (e) {
+      console.warn("⚠️  DB init error:", e?.message || e);
+    }
+  })();
+}
 
 // ---------- Helpers payload ----------
 function extractPayloadFromText(txt) {
@@ -38,18 +81,16 @@ https.globalAgent.keepAlive = true;
 // ---------- App ----------
 const app = express();
 app.use(cors());
-app.use(express.text({ type: "*/*", limit: "1mb" }));
+app.use(express.text({ type: "*/*", limit: "1mb" }));    // parsing tolérant
 app.use(express.urlencoded({ extended: true }));
-app.use(
-  compression({
-    filter: (req, res) => {
-      const accept = req.headers["accept"] || "";
-      const ctype = req.headers["content-type"] || "";
-      if (accept.includes("text/event-stream") || ctype.includes("text/event-stream")) return false;
-      return compression.filter(req, res);
-    },
-  })
-);
+app.use(compression({
+  filter: (req, res) => {
+    const accept = req.headers["accept"] || "";
+    const ctype = req.headers["content-type"] || "";
+    if (accept.includes("text/event-stream") || ctype.includes("text/event-stream")) return false;
+    return compression.filter(req, res);
+  },
+}));
 
 // ---------- Utils ----------
 function tryParseJSON(str){ try { return JSON.parse(str); } catch { return null; } }
@@ -97,7 +138,7 @@ Règles :
 - Bascule CTA si confiance ≥ 0.65 OU symptômes “rouges”, ET lead minimal (marque+modèle+année ou immat, + CP ou moyen de rappel).
 - Si l'utilisateur demande des "détails" (#details), développe davantage sans blabla.`;
 
-const PAYLOAD_INSTRUCTION = `FORMAT DE SORTIE (uniquement pour les réponses non-stream) :
+const PAYLOAD_INSTRUCTION = `FORMAT DE SORTIE (réponses non-stream) :
 Après ta réponse en 4 blocs, ajoute EXACTEMENT :
 <PAYLOAD>{
   "confidence": 0.0,
@@ -114,8 +155,50 @@ Contraintes :
 
 // ---------- Health ----------
 app.get("/healthz", (_req, res) =>
-  res.json({ status:"ok", model: OPENAI_MODEL, branch: process.env.RENDER_GIT_BRANCH || null })
+  res.json({ status:"ok", model: OPENAI_MODEL, branch: process.env.RENDER_GIT_BRANCH || null, db: !!pool })
 );
+
+// ---------- Leads intake (facultatif) ----------
+app.post("/api/leads/intake", async (req, res) => {
+  if (!pool) return res.status(503).json({ error: "DB_NOT_CONFIGURED" });
+  const body = typeof req.body === "string" ? tryParseJSON(req.body) || {} : (req.body || {});
+  const {
+    session_id = null,
+    brand = null, model = null, engine = null, year = null,
+    dtc = null, notes = null, postal_code = null, source = "chat"
+  } = body;
+  try {
+    const { rows } = await pool.query(
+      `insert into leads (session_id, brand, model, engine, year, dtc, notes, postal_code, source)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       returning id, created_at`,
+      [session_id, brand, model, engine, year, dtc, notes, postal_code, source]
+    );
+    res.json({ ok: true, id: rows[0].id });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ---------- Leads callback (facultatif) ----------
+app.post("/api/leads/callback", async (req, res) => {
+  if (!pool) return res.status(503).json({ error: "DB_NOT_CONFIGURED" });
+  const body = typeof req.body === "string" ? tryParseJSON(req.body) || {} : (req.body || {});
+  const {
+    session_id = null, contact_name = null, contact_phone = null, contact_email = null, source = "callback"
+  } = body;
+  try {
+    const { rows } = await pool.query(
+      `insert into leads (session_id, contact_name, contact_phone, contact_email, source)
+       values ($1,$2,$3,$4,$5)
+       returning id, created_at`,
+      [session_id, contact_name, contact_phone, contact_email, source]
+    );
+    res.json({ ok: true, id: rows[0].id });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
 
 // ---------- Diagnose (non-stream) -> { text, payload } ----------
 app.all("/api/diagnose", async (req, res) => {
