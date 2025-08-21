@@ -20,11 +20,9 @@
     .hint{color:var(--muted);font-size:12px}
     .cta{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
     .btn-outline{background:#fff;color:var(--fg)}
-    /* Questions en valeur */
     .questions{margin:10px 0 0 0;padding-left:18px}
     .questions li{margin:4px 0}
     .ask{color:var(--accent);font-weight:700}
-    /* Modal */
     .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
     .modal.open{display:flex}
     .modal .box{background:#fff;border-radius:12px;padding:20px;max-width:560px;width:100%;border:1px solid var(--border)}
@@ -118,10 +116,46 @@
     return `Contexte véhicule fourni par l’utilisateur : ${parts.join(", ")}. Ne redemande pas ces infos ; demande uniquement ce qui manque.`;
   }
 
-  form.addEventListener("submit", async (e) => {
+  // --- Guard: token par requête pour éviter rendus multiples
+  let currentToken = null;
+
+  // --- Handlers de modale attachés UNE FOIS
+  let intakeNext = null;
+  document.getElementById("skipIntake").addEventListener("click", () => {
+    closeModal(modalIntake);
+    if (typeof intakeNext === "function") intakeNext();
+  });
+  document.getElementById("saveIntake").addEventListener("click", async () => {
+    lastLead = {
+      session_id: sid,
+      brand:  document.getElementById("brand").value.trim() || null,
+      model:  document.getElementById("model").value.trim() || null,
+      engine: document.getElementById("engine").value.trim() || null,
+      year:   document.getElementById("year").value.trim() || null,
+      dtc:    document.getElementById("dtc").value.trim() || null,
+      notes:  document.getElementById("notes").value.trim() || null,
+      postal_code: document.getElementById("postal").value.trim() || null
+    };
+    try {
+      await fetch("/api/leads/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(lastLead)
+      });
+    } catch {}
+    closeModal(modalIntake);
+    if (typeof intakeNext === "function") intakeNext();
+  });
+
+  form.addEventListener("submit", (e) => {
     e.preventDefault();
     const prompt = q.value.trim();
     if (!prompt) return;
+
+    // nouveau cycle
+    currentToken = Math.random().toString(36).slice(2);
+    const myToken = currentToken;
+
     out.textContent = "";
     ctas.innerHTML  = "";
     log.textContent = "Toi: " + prompt;
@@ -129,50 +163,33 @@
 
     openModal(modalIntake);
 
-    const doAfterIntake = async () => {
+    intakeNext = async () => {
       const ctx = buildLeadContext();
       const effectivePrompt = (ctx ? (ctx + "\n\n") : "") + prompt;
 
       try {
-        await streamAnswer(effectivePrompt);   // ne rend QUE le texte
+        await streamAnswer(effectivePrompt); // texte seul
       } catch (err) {
         out.textContent = "Erreur: " + (err?.message || err);
       } finally {
-        btn.disabled = false; state.textContent = "";
+        if (myToken === currentToken) { btn.disabled = false; state.textContent = ""; }
       }
 
-      // une seule récupération du payload ici → pas de doublons
+      // si un autre envoi a démarré entre temps, on abandonne ce rendu
+      if (myToken !== currentToken) return;
+
+      // récupérer payload (questions/CTA) UNE fois
       try {
         const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(effectivePrompt)}`);
         if (r.ok) {
           const j = await r.json();
+          // sécurité anti-doublons inter-rendu
+          if (myToken !== currentToken) return;
+          ctas.innerHTML = "";
           renderQuestions(j?.payload?.next_questions);
           renderCTAs(j?.payload);
         }
       } catch {}
-    };
-
-    document.getElementById("skipIntake").onclick = () => { closeModal(modalIntake); doAfterIntake(); };
-    document.getElementById("saveIntake").onclick = async () => {
-      lastLead = {
-        session_id: sid,
-        brand:  document.getElementById("brand").value.trim() || null,
-        model:  document.getElementById("model").value.trim() || null,
-        engine: document.getElementById("engine").value.trim() || null,
-        year:   document.getElementById("year").value.trim() || null,
-        dtc:    document.getElementById("dtc").value.trim() || null,
-        notes:  document.getElementById("notes").value.trim() || null,
-        postal_code: document.getElementById("postal").value.trim() || null
-      };
-      try {
-        await fetch("/api/leads/intake", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(lastLead)
-        });
-      } catch {}
-      closeModal(modalIntake);
-      doAfterIntake();
     };
   });
 
@@ -191,7 +208,7 @@
             const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
             const j = await r.json().catch(() => ({}));
             out.textContent = j?.text || out.textContent || "";
-            resolve(); // CTA/questions seront rendus plus tard par doAfterIntake()
+            resolve();
           } catch {
             reject(new Error("fallback_failed"));
           }
@@ -206,7 +223,7 @@
       es.onmessage = (e) => {
         try {
           const o = JSON.parse(e.data);
-          if (o.error) { es.close(); clearTimeout(watchdog); reject(new Error(o.error)); return; }
+        if (o.error) { es.close(); clearTimeout(watchdog); reject(new Error(o.error)); return; }
           if (o.delta) { out.textContent += o.delta; received = true; }
           if (o.done)  { es.close(); clearTimeout(watchdog); resolve(); return; }
         } catch {
@@ -224,7 +241,7 @@
           const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
           const j = await r.json().catch(() => ({}));
           out.textContent = j?.text || out.textContent || "";
-          resolve(); // CTA/questions rendus ensuite
+          resolve();
         } catch {
           reject(new Error("sse_error_and_fallback_failed"));
         }
@@ -234,7 +251,6 @@
 
   function renderQuestions(nextQuestions){
     if (!Array.isArray(nextQuestions)) return;
-    // dédup insensible à la casse
     const seen = new Set();
     const cleaned = nextQuestions
       .map(s => String(s || "").trim())
@@ -257,8 +273,6 @@
 
   function renderCTAs(payload){
     if (!payload) return;
-
-    // helper dédup
     const buttons = [];
     const keys = new Set();
     const pushBtn = (type, label, url, primary=false) => {
@@ -266,40 +280,37 @@
       const key = `${(type||"").toLowerCase()}|${label.toLowerCase()}`;
       if (!label || keys.has(key)) return;
       keys.add(key);
-
       const b = document.createElement("button");
       b.textContent = label;
       b.className = primary ? "" : "btn-outline";
       if (primary) { b.style.background = "var(--accent)"; b.style.borderColor = "var(--accent)"; }
       if (url) b.onclick = () => { window.location.href = url; };
-      buttons.push({ btn:b, rank: label.toLowerCase().includes("rdv") ? 0 : (label.toLowerCase().includes("rappel") ? 1 : 2) });
+      const rank = /rdv/i.test(label) ? 0 : (/rappel/i.test(label) ? 1 : 2);
+      buttons.push({ btn:b, rank });
     };
 
-    // 1) payload
     if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
       payload.cta.items.forEach(it => pushBtn(it.type, it.label, it.url, false));
     }
 
-    // 2) bouton "Être rappelé" par défaut UNIQUEMENT s'il n'existe pas déjà
-    const hasCallback = Array.isArray(payload?.cta?.items) && payload.cta.items.some(it => (it.type||"").toLowerCase()==="callback" || /rappel/i.test(it?.label||""));
+    const hasCallback = Array.isArray(payload?.cta?.items) &&
+      payload.cta.items.some(it => (it.type||"").toLowerCase()==="callback" || /rappel/i.test(it?.label||""));
     if (!hasCallback) {
-      const b = document.createElement("button");
-      b.textContent = "Être rappelé";
-      b.style.background = "var(--accent)";
-      b.style.borderColor = "var(--accent)";
-      b.onclick = () => openModal(modalCallback);
       const key = "callback|être rappelé";
       if (!keys.has(key)) {
         keys.add(key);
-        buttons.push({ btn:b, rank: 1 });
+        const b = document.createElement("button");
+        b.textContent = "Être rappelé";
+        b.style.background = "var(--accent)";
+        b.style.borderColor = "var(--accent)";
+        b.onclick = () => openModal(modalCallback);
+        buttons.push({ btn:b, rank:1 });
       }
     }
 
-    // 3) tri & limite (2)
     buttons.sort((a,b)=>a.rank-b.rank);
     buttons.slice(0,2).forEach(({btn}) => ctas.appendChild(btn));
 
-    // handlers callback modal
     document.getElementById("cancelCb").onclick = () => closeModal(modalCallback);
     document.getElementById("saveCb").onclick = async () => {
       const body = {
