@@ -9,6 +9,7 @@
       --fg:#0f172a; --muted:#64748b; --border:#e2e8f0; --bg:#f8fafc; --card:#fff;
       --brand:#111827; --accent:#0bb37b; --accent-ghost:#e9fbf4;
       --shadow:0 10px 20px rgba(2,6,23,.08); --radius:16px;
+      --sticky-h: 82px; /* hauteur barre CTA permanente */
     }
     *{box-sizing:border-box}
     html,body{height:100%}
@@ -20,7 +21,7 @@
         var(--bg);
       color:var(--fg);
       font:16px/1.45 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif;
-      padding:24px 24px 170px; /* 👈 espace bas pour la barre sticky */
+      padding:24px 24px calc(var(--sticky-h) + 56px); /* espace pour ne pas masquer le composer */
     }
     .wrap{max-width:980px;margin:0 auto}
     .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow)}
@@ -29,54 +30,51 @@
     h2{margin:0;font-size:22px}
     .sub{color:var(--muted);font-size:13px;margin-top:2px}
 
-    /* ===== Sortie ===== */
+    /* Sortie texte */
     pre{
       white-space:pre-wrap;word-wrap:break-word;margin:12px 0 10px;
       padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:#fff;
-      min-height:60px; max-height:50vh; overflow:auto;   /* 👈 réduit et scrollable */
+      min-height:60px; max-height:50vh; overflow:auto; /* réduit + scroll interne */
     }
 
-    /* ===== Formulaire (composer) ===== */
+    /* Blocs questions + CTA (AU-DESSUS du composer) */
+    #blocks{margin:10px 0 14px}
+    .cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}
+    .qtitle{color:#065f46;font-weight:800;margin:12px 0 6px}
+    .questions{margin:0;padding-left:20px}
+    .questions li{margin:5px 0}
+    .ask{color:#059669;font-weight:800}
+
+    /* Composer : textarea + bouton à droite */
     textarea,input{width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;font-size:16px;background:#fff}
     #q{min-height:64px;resize:vertical}
-    .composer{display:flex;gap:10px;align-items:stretch;margin-top:10px}  /* 👈 bouton à droite du champ */
+    .composer{display:flex;gap:10px;align-items:stretch;margin-top:10px;margin-bottom:16px}
     .composer .send{min-width:clamp(120px,18vw,170px)}
-    .row{display:flex;gap:10px}
-    .col{flex:1}
     .hint{color:var(--muted);font-size:12px}
 
-    /* ===== Boutons ===== */
+    /* Boutons */
     button,.btn{padding:11px 16px;border-radius:12px;border:1px solid var(--brand);background:var(--brand);color:#fff;cursor:pointer;font-weight:600;box-shadow:0 6px 14px rgba(2,6,23,.08)}
     button:disabled{opacity:.6;cursor:not-allowed}
     .btn-outline{background:#fff;color:var(--fg);border-color:#cbd5e1}
     .btn-ghost{background:var(--accent-ghost);color:#0b7;border-color:transparent}
     .btn-accent{background:var(--accent);border-color:var(--accent)}
-    .btn-link{background:transparent;border-color:transparent;color:var(--fg);padding:0}
 
-    /* ===== Questions / CTA ===== */
-    .cta{display:flex;gap:12px;margin-top:14px;flex-wrap:wrap}
-    .questions{margin:10px 0 0;padding-left:20px}
-    .questions li{margin:5px 0}
-    .ask{color:#059669;font-weight:800}
-    .qtitle{color:#065f46;font-weight:800;margin:14px 0 6px}
-
-    /* ===== Status ===== */
+    /* Statut */
     .status{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
     .dot{width:10px;height:10px;border-radius:50%;background:#cbd5e1}
     .dot.live{background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,.7);animation:pulse 1.6s infinite}
     @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.6)}70%{box-shadow:0 0 0 16px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
 
-    /* ===== Modales ===== */
+    /* Modales */
     .modal{position:fixed;inset:0;background:rgba(2,6,23,.35);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
     .modal.open{display:flex}
     .modal .box{background:#fff;border-radius:16px;padding:20px;max-width:560px;width:100%;border:1px solid var(--border);box-shadow:var(--shadow)}
     .modal h3{margin-top:0}
     .modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
 
-    /* ===== Barre sticky (CTA permanents) ===== */
-    .sticky-wrap{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);width:min(980px,calc(100% - 24px*2));z-index:15}
-    .stickybar{display:flex;justify-content:space-between;align-items:center;gap:16px;background:#ffffffcc;border:1px solid var(--border);backdrop-filter:blur(6px) saturate(150%);border-radius:14px;padding:10px 12px;box-shadow:var(--shadow)}
-    .sb-left{display:flex;align-items:center;gap:10px}
+    /* Barre sticky (CTA permanents) */
+    .sticky-wrap{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);width:min(980px,calc(100% - 24px*2));z-index:15;height:var(--sticky-h)}
+    .stickybar{display:flex;justify-content:space-between;align-items:center;gap:16px;background:#ffffffcc;border:1px solid var(--border);backdrop-filter:blur(6px) saturate(150%);border-radius:14px;padding:10px 12px;box-shadow:var(--shadow);height:100%}
     .sb-actions{display:flex;gap:10px;flex-wrap:wrap}
     .sb-actions .btn{min-width:180px}
     .brand-subtle{font-weight:700;background:linear-gradient(90deg,#0ea5e9,#10b981);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -96,26 +94,28 @@
       <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">Prêt</span></div>
 
       <pre id="output"></pre>
-      <div id="ctas" class="cta"></div>
+
+      <!-- 🔹 zone qui reçoit d'abord les questions (“Voici quelques questions…”), puis les CTA -->
+      <div id="blocks">
+        <div id="ctas" class="cta"></div>
+      </div>
 
       <form id="f">
         <div class="composer">
           <textarea id="q" rows="3" placeholder="Décris le symptôme (ex. : Voyant moteur + perte de puissance)…"></textarea>
           <button id="send" type="submit" class="btn-accent send">Envoyer</button>
         </div>
-        <div class="row" style="margin-top:6px;align-items:center">
-          <div class="col"><span id="state" class="hint"></span></div>
-        </div>
+        <div><span id="state" class="hint"></span></div>
       </form>
 
-      <div class="hint" style="margin-top:6px">Le texte arrive en streaming. Les questions utiles et les boutons (CTA) s’affichent ensuite.</div>
+      <div class="hint">Le texte arrive en streaming. Les questions utiles et les boutons (CTA) s’affichent ensuite.</div>
     </div>
   </div>
 
   <!-- Barre d’actions permanente -->
   <div class="sticky-wrap" aria-hidden="false">
     <div class="stickybar">
-      <div class="sb-left"><span class="hint">Besoin d’aide rapide ?</span></div>
+      <span class="hint">Besoin d’aide rapide ?</span>
       <div class="sb-actions">
         <button type="button" id="stickyCallback" class="btn btn-ghost">Être rappelé</button>
         <a id="stickyBooking" href="/rdv" class="btn btn-accent">Demander un diagnostic</a>
@@ -123,7 +123,7 @@
     </div>
   </div>
 
-  <!-- Modal infos véhicule -->
+  <!-- Modale infos véhicule -->
   <div class="modal" id="modalIntake">
     <div class="box">
       <h3>Quelques infos (optionnel)</h3>
@@ -139,7 +139,7 @@
     </div>
   </div>
 
-  <!-- Modal rappel -->
+  <!-- Modale rappel -->
   <div class="modal" id="modalCallback">
     <div class="box">
       <h3>Être rappelé par un conseiller</h3>
@@ -155,11 +155,11 @@
 
   <script>
   const out   = document.getElementById("output");
-  const state = document.getElementById("state");
   const form  = document.getElementById("f");
   const q     = document.getElementById("q");
   const btn   = document.getElementById("send");
   const ctas  = document.getElementById("ctas");
+  const blocks= document.getElementById("blocks");
   const modalIntake = document.getElementById("modalIntake");
   const modalCallback = document.getElementById("modalCallback");
   const stickyCallback = document.getElementById("stickyCallback");
@@ -174,24 +174,21 @@
   function closeModal(m){ m.classList.remove("open"); }
 
   let lastLead = null;
-
   function buildLeadContext() {
     if (!lastLead) return "";
-    const parts = [];
-    if (lastLead.brand)  parts.push(`marque=${lastLead.brand}`);
-    if (lastLead.model)  parts.push(`modèle=${lastLead.model}`);
-    if (lastLead.engine) parts.push(`moteur=${lastLead.engine}`);
-    if (lastLead.year)   parts.push(`année=${lastLead.year}`);
-    if (lastLead.dtc)    parts.push(`code DTC=${lastLead.dtc}`);
-    if (lastLead.postal_code) parts.push(`code postal=${lastLead.postal_code}`);
-    if (lastLead.notes)  parts.push(`observations=${lastLead.notes}`);
-    if (!parts.length) return "";
-    return `Contexte véhicule fourni par l’utilisateur : ${parts.join(", ")}. Ne redemande pas ces infos ; demande uniquement ce qui manque.`;
+    const p=[];
+    if (lastLead.brand) p.push(`marque=${lastLead.brand}`);
+    if (lastLead.model) p.push(`modèle=${lastLead.model}`);
+    if (lastLead.engine) p.push(`moteur=${lastLead.engine}`);
+    if (lastLead.year) p.push(`année=${lastLead.year}`);
+    if (lastLead.dtc) p.push(`code DTC=${lastLead.dtc}`);
+    if (lastLead.postal_code) p.push(`code postal=${lastLead.postal_code}`);
+    if (lastLead.notes) p.push(`observations=${lastLead.notes}`);
+    return p.length ? `Contexte véhicule fourni par l’utilisateur : ${p.join(", ")}. Ne redemande pas ces infos ; demande uniquement ce qui manque.` : "";
   }
 
-  let currentToken = null;
+  let currentToken = null, intakeNext = null;
 
-  let intakeNext = null;
   document.getElementById("skipIntake").addEventListener("click", () => {
     closeModal(modalIntake);
     if (typeof intakeNext === "function") intakeNext();
@@ -235,9 +232,7 @@
       });
       closeModal(modalCallback);
       alert("Merci ! On te rappelle rapidement.");
-    } catch {
-      alert("Désolé, l’enregistrement a échoué.");
-    }
+    } catch { alert("Désolé, l’enregistrement a échoué."); }
   };
 
   form.addEventListener("submit", (e) => {
@@ -275,13 +270,14 @@
           const j = await r.json();
           if (myToken !== currentToken) return;
           ctas.innerHTML = "";
-          renderQuestions(j?.payload?.next_questions);
-          renderCTAs(j?.payload);
+          renderQuestions(j?.payload?.next_questions);  // ✅ Questions visibles
+          renderCTAs(j?.payload);                       // ✅ CTA additionnels (hors doublons sticky)
         }
       } catch {}
     };
   });
 
+  // SSE + fallback non-stream
   async function streamAnswer(prompt) {
     const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
     let received = false;
@@ -333,12 +329,13 @@
   }
 
   function renderQuestions(nextQuestions){
-    if (!Array.isArray(nextQuestions)) return;
+    if (!Array.isArray(nextQuestions) || !nextQuestions.length) return;
     const seen = new Set();
     const cleaned = nextQuestions
       .map(s => String(s||"").trim())
       .filter(Boolean)
       .filter(q => { const k=q.toLowerCase().replace(/\s+/g," "); if(seen.has(k))return false; seen.add(k); return true; });
+
     if (!cleaned.length) return;
 
     const block = document.createElement("div");
@@ -347,11 +344,12 @@
     title.textContent = "Voici quelques questions pour affiner le diagnostic et t’aider à trouver la bonne solution :";
     block.appendChild(title);
 
-    const ul = document.createElement("ul"); ul.className="questions";
+    const ul = document.createElement("ul"); ul.className = "questions";
     cleaned.forEach(q => { const li=document.createElement("li"); li.className="ask"; li.textContent=q; ul.appendChild(li); });
     block.appendChild(ul);
 
-    ctas.appendChild(block);
+    // on insère AVANT les boutons cta → meilleure lisibilité
+    blocks.insertBefore(block, ctas);
   }
 
   function renderCTAs(payload){
