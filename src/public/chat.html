@@ -5,51 +5,171 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Re-FAP assistant</title>
   <style>
-    :root{--fg:#111;--muted:#6b7280;--border:#e5e7eb;--bg:#fafafa;--brand:#111;--accent:#0b5}
+    /* ========= Thème ========= */
+    :root{
+      --fg:#0f172a;           /* slate-900 */
+      --muted:#64748b;        /* slate-500 */
+      --border:#e2e8f0;       /* slate-200 */
+      --bg:#f8fafc;           /* slate-50 */
+      --card:#ffffff;
+      --brand:#111827;        /* gray-900 */
+      --accent:#0bb37b;       /* vert */
+      --accent-ghost:#e9fbf4;
+      --shadow: 0 10px 20px rgba(2,6,23,.08);
+      --radius:16px;
+    }
+
     *{box-sizing:border-box}
-    body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:24px;background:var(--bg);color:var(--fg)}
+    html,body{height:100%}
+    body{
+      margin:0;
+      background:
+        radial-gradient(1200px 800px at 85% -10%, #d1fae5 0%, rgba(209,250,229,0) 55%),
+        radial-gradient(900px 600px at -10% 10%, #e0f2fe 0%, rgba(224,242,254,0) 45%),
+        var(--bg);
+      color:var(--fg);
+      font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      padding:24px;
+    }
+
+    /* ========= Grille ========= */
     .wrap{max-width:980px;margin:0 auto}
-    .card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:20px}
-    h2{margin:0 0 6px 0}
-    textarea,input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;font-size:16px}
-    button{padding:10px 16px;border:1px solid var(--brand);border-radius:10px;background:var(--brand);color:#fff;cursor:pointer}
-    button:disabled{opacity:.6;cursor:not-allowed}
-    pre{white-space:pre-wrap;word-wrap:break-word;margin:8px 0 0}
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: saturate(130%) blur(2px);
+    }
+
+    /* ========= Titre / header ========= */
+    .header{
+      display:flex; align-items:center; gap:12px; margin-bottom:10px;
+    }
+    .logo{
+      display:inline-grid; place-items:center;
+      width:42px;height:42px;border-radius:12px;
+      background:linear-gradient(135deg,#10b981, #0ea5e9);
+      color:#fff; font-weight:800; letter-spacing:.5px;
+      box-shadow: 0 8px 20px rgba(16,185,129,.25);
+    }
+    h2{margin:0;font-size:22px}
+    .sub{color:var(--muted);font-size:13px;margin-top:2px}
+
+    /* ========= Zone sortie ========= */
+    pre{
+      white-space:pre-wrap; word-wrap:break-word; margin:12px 0 10px;
+      padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:#fff;
+      min-height:60px;
+    }
+
+    /* ========= Formulaire ========= */
+    textarea,input{
+      width:100%; padding:12px 14px; border:1px solid var(--border);
+      border-radius:12px; font-size:16px; background:#fff;
+    }
     .row{display:flex;gap:10px}
     .col{flex:1}
     .hint{color:var(--muted);font-size:12px}
-    .cta{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
-    .btn-outline{background:#fff;color:var(--fg)}
-    /* Questions en valeur */
-    .questions{margin:10px 0 0 0;padding-left:18px}
-    .questions li{margin:4px 0}
-    .ask{color:var(--accent);font-weight:700}
-    .qtitle{color:var(--accent);font-weight:700;margin:12px 0 6px}
-    /* Modal */
-    .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
+
+    /* ========= Boutons ========= */
+    button,.btn{
+      padding:11px 16px; border-radius:12px; border:1px solid var(--brand);
+      background:var(--brand); color:#fff; cursor:pointer; font-weight:600;
+      box-shadow: 0 6px 14px rgba(2,6,23,.08);
+    }
+    button:disabled{opacity:.6;cursor:not-allowed;filter:grayscale(.1)}
+    .btn-outline{background:#fff;color:var(--fg);border-color:#cbd5e1}
+    .btn-ghost{background:var(--accent-ghost); color:#0b7; border-color:transparent}
+    .btn-accent{background:var(--accent); border-color:var(--accent)}
+    .btn-link{background:transparent;border-color:transparent;color:var(--fg);padding:0}
+
+    /* ========= CTA dynamiques ========= */
+    .cta{display:flex;gap:12px;margin-top:14px;flex-wrap:wrap}
+    .cta > button, .cta > a{min-width:220px}
+
+    /* ========= Questions ========= */
+    .questions{margin:10px 0 0 0;padding-left:20px}
+    .questions li{margin:5px 0}
+    .ask{color:#059669;font-weight:800}
+    .qtitle{color:#065f46;font-weight:800;margin:14px 0 6px}
+
+    /* ========= État (en cours) ========= */
+    .status{
+      display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)
+    }
+    .dot{width:10px;height:10px;border-radius:50%;background:#cbd5e1}
+    .dot.live{background:#22c55e; box-shadow:0 0 0 0 rgba(34,197,94,.7); animation:pulse 1.6s infinite}
+    @keyframes pulse {
+      0%{box-shadow:0 0 0 0 rgba(34,197,94,.6)}
+      70%{box-shadow:0 0 0 16px rgba(34,197,94,0)}
+      100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}
+    }
+
+    /* ========= Modales ========= */
+    .modal{position:fixed;inset:0;background:rgba(2,6,23,.35);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
     .modal.open{display:flex}
-    .modal .box{background:#fff;border-radius:12px;padding:20px;max-width:560px;width:100%;border:1px solid var(--border)}
+    .modal .box{background:#fff;border-radius:16px;padding:20px;max-width:560px;width:100%;border:1px solid var(--border);box-shadow:var(--shadow)}
     .modal h3{margin-top:0}
     .modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
+
+    /* ========= Barre d’actions sticky ========= */
+    .sticky-wrap{
+      position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
+      width:min(980px, calc(100% - 24px*2));
+      z-index:15;
+    }
+    .stickybar{
+      display:flex;justify-content:space-between;align-items:center;gap:16px;
+      background:#ffffffcc;border:1px solid var(--border);backdrop-filter: blur(6px) saturate(150%);
+      border-radius:14px;padding:10px 12px;box-shadow:var(--shadow);
+    }
+    .sb-left{display:flex;align-items:center;gap:10px}
+    .sb-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .sb-actions .btn{min-width:180px}
+    .brand-subtle{font-weight:700;background:linear-gradient(90deg,#0ea5e9,#10b981);-webkit-background-clip:text;background-clip:text;color:transparent}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h2>Re-FAP assistant</h2>
-      <div id="log" class="hint"></div>
+      <div class="header">
+        <div class="logo">FAP</div>
+        <div>
+          <h2 class="brand-subtle">Assistant Re-FAP</h2>
+          <div class="sub">Diagnostic pédagogique → puis options simples pour passer à l’action.</div>
+        </div>
+      </div>
+
+      <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">Prêt</span></div>
+
       <pre id="output"></pre>
       <div id="ctas" class="cta"></div>
 
       <form id="f" style="margin-top:16px">
-        <textarea id="q" rows="3" placeholder="Décris le symptôme..."></textarea>
+        <textarea id="q" rows="3" placeholder="Décris le symptôme (ex. : Voyant moteur + perte de puissance)…"></textarea>
         <div class="row" style="margin-top:10px;align-items:center">
           <div class="col"><span id="state" class="hint"></span></div>
-          <button id="send" type="submit">Envoyer</button>
+          <button id="send" type="submit" class="btn-accent">Envoyer</button>
         </div>
       </form>
+
       <div class="hint" style="margin-top:6px">
         Le texte arrive en streaming. Les questions utiles et les boutons (CTA) s’affichent ensuite.
+      </div>
+    </div>
+  </div>
+
+  <!-- ==== Barre d’actions permanente ==== -->
+  <div class="sticky-wrap">
+    <div class="stickybar">
+      <div class="sb-left">
+        <span class="hint">Besoin d’aide rapide ?</span>
+      </div>
+      <div class="sb-actions">
+        <button type="button" id="stickyCallback" class="btn btn-ghost">Être rappelé</button>
+        <a id="stickyBooking" href="/rdv" class="btn btn-accent">Demander un diagnostic</a>
       </div>
     </div>
   </div>
@@ -64,7 +184,7 @@
       <div style="margin-top:8px"><textarea id="notes" rows="2" placeholder="Observations (facultatif)"></textarea></div>
       <div class="actions">
         <button type="button" id="skipIntake" class="btn-outline">Ignorer</button>
-        <button type="button" id="saveIntake">Enregistrer</button>
+        <button type="button" id="saveIntake" class="btn-accent">Enregistrer</button>
       </div>
       <div class="hint">Ces infos nous aident à affiner le diagnostic et à te proposer un garage proche. Tu peux ignorer.</div>
     </div>
@@ -78,7 +198,7 @@
       <div class="row" style="margin-top:8px"><div class="col"><input id="cbEmail" placeholder="Email"></div></div>
       <div class="actions">
         <button type="button" id="cancelCb" class="btn-outline">Annuler</button>
-        <button type="button" id="saveCb">Envoyer</button>
+        <button type="button" id="saveCb" class="btn-accent">Envoyer</button>
       </div>
       <div class="hint">On t’appelle rapidement pour caler un rendez-vous avec un garage partenaire sérieux.</div>
     </div>
@@ -86,15 +206,17 @@
 
   <script>
   const out   = document.getElementById("output");
-  const log   = document.getElementById("log");
   const state = document.getElementById("state");
   const form  = document.getElementById("f");
   const q     = document.getElementById("q");
   const btn   = document.getElementById("send");
   const ctas  = document.getElementById("ctas");
-
   const modalIntake = document.getElementById("modalIntake");
   const modalCallback = document.getElementById("modalCallback");
+  const stickyCallback = document.getElementById("stickyCallback");
+  const stickyBooking  = document.getElementById("stickyBooking");
+  const statusDot  = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
 
   const SID_KEY = "refap_sid";
   let sid = localStorage.getItem(SID_KEY);
@@ -119,10 +241,10 @@
     return `Contexte véhicule fourni par l’utilisateur : ${parts.join(", ")}. Ne redemande pas ces infos ; demande uniquement ce qui manque.`;
   }
 
-  // --- Guard: token par requête pour éviter rendus multiples
+  // Token pour éviter rendus multiples
   let currentToken = null;
 
-  // --- Handlers de modale attachés UNE FOIS
+  // Handlers modales attachés une fois
   let intakeNext = null;
   document.getElementById("skipIntake").addEventListener("click", () => {
     closeModal(modalIntake);
@@ -150,19 +272,42 @@
     if (typeof intakeNext === "function") intakeNext();
   });
 
+  // Barre sticky
+  stickyCallback.onclick = () => openModal(modalCallback);
+
+  document.getElementById("cancelCb").onclick = () => closeModal(modalCallback);
+  document.getElementById("saveCb").onclick = async () => {
+    const body = {
+      session_id: sid,
+      contact_name:  document.getElementById("cbName").value.trim() || null,
+      contact_phone: document.getElementById("cbPhone").value.trim() || null,
+      contact_email: document.getElementById("cbEmail").value.trim() || null
+    };
+    try {
+      await fetch("/api/leads/callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      closeModal(modalCallback);
+      alert("Merci ! On te rappelle rapidement.");
+    } catch {
+      alert("Désolé, l’enregistrement a échoué.");
+    }
+  };
+
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     const prompt = q.value.trim();
     if (!prompt) return;
 
-    // nouveau cycle
     currentToken = Math.random().toString(36).slice(2);
     const myToken = currentToken;
 
     out.textContent = "";
     ctas.innerHTML  = "";
-    log.textContent = "Toi: " + prompt;
-    btn.disabled = true; state.textContent = "…";
+    btn.disabled = true; state.textContent = "";
+    statusDot.classList.add("live"); statusText.textContent = "Réponse en cours…";
 
     openModal(modalIntake);
 
@@ -175,7 +320,10 @@
       } catch (err) {
         out.textContent = "Erreur: " + (err?.message || err);
       } finally {
-        if (myToken === currentToken) { btn.disabled = false; state.textContent = ""; }
+        if (myToken === currentToken) {
+          btn.disabled = false;
+          statusDot.classList.remove("live"); statusText.textContent = "Prêt";
+        }
       }
 
       if (myToken !== currentToken) return;
@@ -193,7 +341,7 @@
     };
   });
 
-  // --- SSE robuste : watchdog + fallback non-stream (texte seul)
+  // SSE robuste : watchdog + fallback non-stream (texte seul)
   async function streamAnswer(prompt) {
     const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
     let received = false;
@@ -251,8 +399,6 @@
 
   function renderQuestions(nextQuestions){
     if (!Array.isArray(nextQuestions)) return;
-
-    // dédup insensible à la casse
     const seen = new Set();
     const cleaned = nextQuestions
       .map(s => String(s || "").trim())
@@ -262,12 +408,9 @@
         if (seen.has(key)) return false;
         seen.add(key); return true;
       });
-
     if (!cleaned.length) return;
 
-    // bloc questions + titre
     const block = document.createElement("div");
-
     const title = document.createElement("div");
     title.className = "qtitle";
     title.textContent = "Voici quelques questions pour affiner le diagnostic et t’aider à trouver la bonne solution :";
@@ -293,13 +436,12 @@
       const key = `${(type||"").toLowerCase()}|${label.toLowerCase()}`;
       if (!label || keys.has(key)) return;
       keys.add(key);
-      const b = document.createElement("button");
-      b.textContent = label;
-      b.className = primary ? "" : "btn-outline";
-      if (primary) { b.style.background = "var(--accent)"; b.style.borderColor = "var(--accent)"; }
-      if (url) b.onclick = () => { window.location.href = url; };
-      const rank = /rdv/i.test(label) ? 0 : (/rappel/i.test(label) ? 1 : 2);
-      buttons.push({ btn:b, rank });
+      const el = document.createElement(url ? "a" : "button");
+      el.textContent = label;
+      el.className = primary ? "btn btn-accent" : "btn btn-outline";
+      if (url) { el.href = url; }
+      const rank = /rdv|diagnostic/i.test(label) ? 0 : (/rappel/i.test(label) ? 1 : 2);
+      buttons.push({ el, rank });
     };
 
     if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
@@ -314,36 +456,14 @@
         keys.add(key);
         const b = document.createElement("button");
         b.textContent = "Être rappelé";
-        b.style.background = "var(--accent)";
-        b.style.borderColor = "var(--accent)";
+        b.className = "btn btn-ghost";
         b.onclick = () => openModal(modalCallback);
-        buttons.push({ btn:b, rank:1 });
+        buttons.push({ el:b, rank:1 });
       }
     }
 
     buttons.sort((a,b)=>a.rank-b.rank);
-    buttons.slice(0,2).forEach(({btn}) => ctas.appendChild(btn));
-
-    document.getElementById("cancelCb").onclick = () => closeModal(modalCallback);
-    document.getElementById("saveCb").onclick = async () => {
-      const body = {
-        session_id: sid,
-        contact_name:  document.getElementById("cbName").value.trim() || null,
-        contact_phone: document.getElementById("cbPhone").value.trim() || null,
-        contact_email: document.getElementById("cbEmail").value.trim() || null
-      };
-      try {
-        await fetch("/api/leads/callback", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-        });
-        closeModal(modalCallback);
-        alert("Merci ! On te rappelle rapidement.");
-      } catch {
-        alert("Désolé, l’enregistrement a échoué.");
-      }
-    };
+    buttons.slice(0,2).forEach(({el}) => ctas.appendChild(el));
   }
   </script>
 </body>
