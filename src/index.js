@@ -20,6 +20,8 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
+
+// ---------- Helpers payload ----------
 function extractPayloadFromText(txt) {
   const m = String(txt || "").match(/<PAYLOAD>([\s\S]*?)<\/PAYLOAD>/);
   if (!m) return null;
@@ -29,11 +31,11 @@ function stripPayloadBlock(txt) {
   return String(txt || "").replace(/<PAYLOAD>[\s\S]*?<\/PAYLOAD>/g, "").trim();
 }
 
-// perf réseau
+// ---------- Perf réseau ----------
 http.globalAgent.keepAlive = true;
 https.globalAgent.keepAlive = true;
 
-// app
+// ---------- App ----------
 const app = express();
 app.use(cors());
 app.use(express.text({ type: "*/*", limit: "1mb" }));
@@ -49,7 +51,7 @@ app.use(
   })
 );
 
-// utils
+// ---------- Utils ----------
 function tryParseJSON(str){ try { return JSON.parse(str); } catch { return null; } }
 function pickPrompt(req){
   if (req.query?.prompt) return String(req.query.prompt);
@@ -65,7 +67,7 @@ function pickPrompt(req){
 function sseWrite(res, payload){ res.write(`data:${JSON.stringify(payload)}\n\n`); }
 function sseHeartbeat(res){ res.write(`:hb ${Date.now()}\n\n`); }
 
-// mode “détails” via mot-clé
+// ---------- Mode “détails” ----------
 const DETAIL_KEYWORDS = ["détails","détaillé","detail","complet","approfondi","long","full","#details"];
 function detectDetailModeAndClean(promptRaw){
   const raw = String(promptRaw || "");
@@ -76,82 +78,58 @@ function detectDetailModeAndClean(promptRaw){
   for (const k of DETAIL_KEYWORDS) cleaned = cleaned.replace(new RegExp(k, "ig"), "");
   return { detailed:true, prompt: cleaned.trim() };
 }
-// ===== PROMPTS MÉTIER =====
+
+// ---------- Prompts métier ----------
 const SYSTEM_PROMPT = `Tu es un mécano expérimenté ET pédagogue.
 Objectif en 2 temps :
 (1) Diagnostic initial pertinent et compréhensible, avec collecte d'infos utiles.
 (2) Proposer ensuite un passage chez un pro (CTA) seulement quand c'est pertinent.
 
 Règles :
-- Langue : français clair, ton pro et rassurant.
-- Toujours répondre en 4 blocs quand tu donnes un avis :
+- Français clair, ton pro et rassurant.
+- Toujours répondre en 4 blocs :
   1) Diagnostic probable (1–2 lignes, top 1–3 causes)
   2) Vérifs prioritaires (3–5 puces, accessibles si possible)
-  3) Actions immédiates (3–5 puces : sécurité, éviter dégâts, roulage si FAP pertinent)
+  3) Actions immédiates (3–5 puces)
   4) Quand passer à la valise (1–2 lignes)
-
-- Ne JAMAIS pousser un CTA avant d'avoir :
-  (a) expliqué simplement le pourquoi,
-  (b) posé 1–2 questions d'exploration,
-  (c) tenté de collecter des infos lead utiles si l'utilisateur est réceptif.
-
-- Collecte lead discrète (si l'utilisateur est ok) :
-  marque, modèle, année/moteur, kilométrage, type d’usage (trajets courts/longs), code postal, code défaut éventuel.
-
-- Bascule CTA uniquement si :
-  - confiance ≥ 0.65 sur l'hypothèse principale OU symptômes “rouges”,
-  - au moins marque+modèle+année OU immatriculation, ET code postal OU moyen de rappel.
-
-- CTA : reste pédagogique, explique la valeur (“confirmation rapide au diag valise, limiter les dégâts, devis clair”).
-  Propose 1–2 choix max (RDV, être rappelé, nettoyage FAP si pertinent).
-
-- Si l'utilisateur demande des "détails" (#details), développe davantage sans blabla inutile.
-- Si hors-scope (non auto), recadre gentiment.`;
+- Ne JAMAIS pousser un CTA avant d'avoir expliqué, posé 1–2 questions et tenté de collecter des infos lead (si l'utilisateur est réceptif).
+- Collecte lead discrète : marque, modèle, année/moteur, km, usage, CP, codes OBD si connus.
+- Bascule CTA si confiance ≥ 0.65 OU symptômes “rouges”, ET lead minimal (marque+modèle+année ou immat, + CP ou moyen de rappel).
+- Si l'utilisateur demande des "détails" (#details), développe davantage sans blabla.`;
 
 const PAYLOAD_INSTRUCTION = `FORMAT DE SORTIE (uniquement pour les réponses non-stream) :
-Après ta réponse en 4 blocs, ajoute un bloc balisé EXACTEMENT ainsi :
+Après ta réponse en 4 blocs, ajoute EXACTEMENT :
 <PAYLOAD>{
   "confidence": 0.0,
   "probable_causes": [],
   "next_questions": [],
   "lead_missing": ["brand","model","year","engine","mileage_km","postal_code","contact"],
-  "cta": {
-    "show": false,
-    "items": [
-      // Exemples quand pertinent :
-      // {"type":"booking","label":"Prendre RDV diagnostic","url":"/rdv"},
-      // {"type":"callback","label":"Être rappelé","url":"/rappel"},
-      // {"type":"product","label":"Nettoyage FAP hors véhicule","url":"/nettoyage-fap"}
-    ]
-  }
+  "cta": { "show": false, "items": [] }
 }</PAYLOAD>
 Contraintes :
 - confidence ∈ [0,1]
-- next_questions : 1 à 3 questions utiles (courtes)
-- Si tu estimes que CTA est pertinent selon les règles, mets "cta.show": true et propose 1–2 items max.
-- Ne mets PAS d'autres champs dans le JSON.`;
+- next_questions : 1 à 3 questions courtes
+- Si CTA pertinent selon les règles, "cta.show": true et propose 1–2 items (booking/callback/produit).
+- N’ajoute pas d’autres champs dans le JSON.`;
 
-
-// health
+// ---------- Health ----------
 app.get("/healthz", (_req, res) =>
   res.json({ status:"ok", model: OPENAI_MODEL, branch: process.env.RENDER_GIT_BRANCH || null })
 );
 
-// ===== Diagnose (non-stream) avec payload JSON =====
+// ---------- Diagnose (non-stream) -> { text, payload } ----------
 app.all("/api/diagnose", async (req, res) => {
   const promptRaw = pickPrompt(req);
   if (!promptRaw) return res.status(400).json({ error: "MISSING_PROMPT" });
 
-  // Si tu as déjà detectDetailModeAndClean, garde-le. Sinon, envoie promptRaw directement.
-  const userPrompt = promptRaw;
+  const userPrompt = String(promptRaw);
 
   try {
     const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        // 👉 on ajoute l'instruction de payload UNIQUEMENT en non-stream
-        { role: "system", content: PAYLOAD_INSTRUCTION },
+        { role: "system", content: PAYLOAD_INSTRUCTION }, // contrat JSON non-stream
         { role: "user", content: userPrompt }
       ]
     });
@@ -162,27 +140,21 @@ app.all("/api/diagnose", async (req, res) => {
       probable_causes: [],
       next_questions: [
         "Marque, modèle, année/moteur ?",
-        "Kilométrage et type de trajets (courts/longs) ?",
-        "Ton code postal pour te proposer un garage proche ?"
+        "Kilométrage et type d’usage (courts/longs) ?",
+        "Ton code postal pour proposer un garage proche ?"
       ],
       lead_missing: ["brand","model","year","engine","mileage_km","postal_code","contact"],
       cta: { show: false, items: [] }
     };
     const text = stripPayloadBlock(raw);
 
-    res.json({ text: text.trim(), payload });
-  } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
-  }
-});
-    const text = chat.choices?.[0]?.message?.content?.trim() || "";
-    res.json({ text, mode: detailed ? "detailed" : "concise" });
+    res.json({ text: text.trim(), payload, mode: "concise" });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
 });
 
-// stream (aucun param non supporté)
+// ---------- Diagnose (stream) : texte seul ----------
 async function handleDiagnoseStream(req, res){
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -223,7 +195,8 @@ async function handleDiagnoseStream(req, res){
 }
 app.get("/api/diagnose/stream", handleDiagnoseStream);
 app.post("/api/diagnose/stream", handleDiagnoseStream);
-// --- Compat anciens endpoints admin -> redirige vers /api/diagnose ---
+
+// ---------- Compat anciens endpoints admin ----------
 app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => {
   const promptRaw = (req.query?.prompt || req.query?.q || (typeof req.body === "string" ? req.body : req.body?.prompt) || "").toString();
   if (!promptRaw) return res.status(400).json({ error: "MISSING_PROMPT" });
@@ -243,8 +216,8 @@ app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => 
   }
 });
 
-// static
+// ---------- Static ----------
 app.use(express.static(path.join(__dirname, "public")));
 
-// start
+// ---------- Start ----------
 app.listen(PORT, () => console.log(`🚀 Server up on :${PORT}`));
