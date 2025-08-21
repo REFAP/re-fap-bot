@@ -28,6 +28,11 @@ const openai = new OpenAI({
 });
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
+// Réglages qualité/latence
+const MAX_TOKENS_SHORT = Number(process.env.MAX_TOKENS_SHORT || 600);   // mode rapide/concis
+const MAX_TOKENS_LONG  = Number(process.env.MAX_TOKENS_LONG  || 1400);  // mode détaillé
+const TEMPERATURE      = Number(process.env.TEMPERATURE      || 0.2);
+
 // DB (facultatif)
 const DATABASE_URL = process.env.DATABASE_URL;
 let pool = null;
@@ -52,7 +57,6 @@ const app = express();
 app.use(cors());
 
 // ⚠️ Pas de json() global → on prend tout en texte brut et on parse nous-mêmes.
-//   Ça élimine les “Bad Request” d’Express si le JSON n’est pas exactement comme il aime.
 app.use(express.text({ type: "*/*", limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -104,10 +108,7 @@ function pickPrompt(req) {
 }
 
 function pickMessages(req) {
-  // Accepte:
-  //  - GET ?q=...
-  //  - POST body texte brut: {"messages":[...]} ou juste le texte
-  //  - POST form urlencoded (rare)
+  // Ancienne compat : accepte q=… / messages[]
   const q = (req.query?.q ?? "").toString().trim();
   if (q) {
     return [
@@ -119,7 +120,6 @@ function pickMessages(req) {
   if (typeof req.body === "string" && req.body.length) {
     const maybe = tryParseJSON(req.body);
     if (maybe && Array.isArray(maybe.messages)) return maybe.messages;
-    // si c'est juste du texte on en fait un prompt
     return [
       { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
       { role: "user", content: req.body.trim() },
@@ -133,6 +133,46 @@ function pickMessages(req) {
 
 function sseWrite(res, payload) { res.write(`data:${JSON.stringify(payload)}\n\n`); }
 function sseHeartbeat(res) { res.write(`:hb ${Date.now()}\n\n`); }
+
+// ======== MODE DÉTAILLÉ PAR MOT-CLÉ ========
+// Détection “mot-clé” → bascule en mode long. On retire le mot-clé du prompt.
+const DETAIL_KEYWORDS = [
+  "détails", "détaillé", "detail", "detailed", "detailing",
+  "complet", "approfondi", "long", "explication complète", "full", "#details"
+];
+
+function detectDetailModeAndClean(promptRaw) {
+  const raw = String(promptRaw || "");
+  const lower = raw.toLowerCase();
+  const detailed = DETAIL_KEYWORDS.some(k => lower.includes(k));
+  if (!detailed) return { detailed: false, prompt: raw.trim() };
+
+  // retire proprement les mots-clés (insensible casse/accents simples)
+  let cleaned = raw;
+  for (const k of DETAIL_KEYWORDS) {
+    const re = new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
+    cleaned = cleaned.replace(re, "").trim();
+  }
+  // nettoyage espaces multiples
+  cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
+  return { detailed: true, prompt: cleaned };
+}
+
+// ======== PROMPT MÉTIER (structure claire) ========
+const SYSTEM_PROMPT_BASE = `Tu es un mécano expérimenté. Parle en français, cash et pro.
+Structure toujours en 4 blocs courts:
+1) Diagnostic probable (1–2 lignes)
+2) Vérifs prioritaires (3–5 puces)
+3) Actions immédiates (3–5 puces)
+4) Quand passer à la valise (1–2 lignes)
+Si l'utilisateur demande des "détails", tu peux développer davantage, sinon reste concis. Évite le blabla inutile.`;
+
+function buildMessagesFromPrompt(userPrompt) {
+  return [
+    { role: "system", content: SYSTEM_PROMPT_BASE },
+    { role: "user", content: userPrompt }
+  ];
+}
 
 // ======== HEALTH ========
 app.get("/healthz", async (_req, res) => {
@@ -179,19 +219,26 @@ app.get("/api/admin/schema", async (_req, res) => {
 
 // ======== DIAGNOSE (non-stream, robuste) ========
 app.all("/api/diagnose", async (req, res) => {
-  const prompt = pickPrompt(req);
-  if (!prompt) return res.status(400).json({ error: "MISSING_PROMPT", hint: 'POST texte brut {"prompt":"..."} ou GET ?prompt=...' });
+  const promptRaw = pickPrompt(req);
+  if (!promptRaw) return res.status(400).json({ error: "MISSING_PROMPT", hint: 'POST texte brut {"prompt":"..."} ou GET ?prompt=...' });
+
+  const { detailed, prompt } = detectDetailModeAndClean(promptRaw);
+  const maxTokens = detailed ? MAX_TOKENS_LONG : MAX_TOKENS_SHORT;
 
   try {
+    const messages = buildMessagesFromPrompt(prompt);
+    const t0 = Date.now();
     const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      messages: [
-        { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
-        { role: "user", content: prompt },
-      ],
+      temperature: TEMPERATURE,
+      max_tokens: maxTokens,
+      messages
     });
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
-    res.json({ text });
+    res
+      .setHeader("X-Mode", detailed ? "detailed" : "concise")
+      .setHeader("X-OpenAI-Latency-ms", String(Date.now() - t0))
+      .json({ text, mode: detailed ? "detailed" : "concise" });
   } catch (e) {
     res.status(500).json({ error: e?.message ? String(e.message) : String(e) });
   }
@@ -199,19 +246,22 @@ app.all("/api/diagnose", async (req, res) => {
 
 // ======== ADMIN DIAGNOSE (alias non-stream) ========
 app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => {
-  const prompt = pickPrompt(req);
-  if (!prompt) return res.status(400).json({ error: "MISSING_PROMPT" });
+  const promptRaw = pickPrompt(req);
+  if (!promptRaw) return res.status(400).json({ error: "MISSING_PROMPT" });
+
+  const { detailed, prompt } = detectDetailModeAndClean(promptRaw);
+  const maxTokens = detailed ? MAX_TOKENS_LONG : MAX_TOKENS_SHORT;
 
   try {
+    const messages = buildMessagesFromPrompt(prompt);
     const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      messages: [
-        { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
-        { role: "user", content: prompt },
-      ],
+      temperature: TEMPERATURE,
+      max_tokens: maxTokens,
+      messages
     });
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
-    res.json({ text });
+    res.json({ text, mode: detailed ? "detailed" : "concise" });
   } catch (e) {
     res.status(500).json({ error: e?.message ? String(e.message) : String(e) });
   }
@@ -239,43 +289,65 @@ async function handleDiagnoseStream(req, res) {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  // évite les buffers intermédiaires sur certains proxies
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
   const hb = setInterval(() => sseHeartbeat(res), 15_000);
   req.on("close", () => clearInterval(hb));
 
   try {
-    const messages = pickMessages(req);
-    if (!messages.length) { sseWrite(res, { error: "MISSING_MESSAGES" }); clearInterval(hb); return res.end(); }
+    // Nouveau chemin : on force la construction messages avec notre SYSTEM_PROMPT_BASE
+    const promptRaw = pickPrompt(req);
+    if (!promptRaw) { sseWrite(res, { error: "MISSING_PROMPT" }); clearInterval(hb); return res.end(); }
 
-    const cacheKey = norm(JSON.stringify(messages));
+    const { detailed, prompt } = detectDetailModeAndClean(promptRaw);
+    const maxTokens = detailed ? MAX_TOKENS_LONG : MAX_TOKENS_SHORT;
+
+    const cacheKey = norm(`v2|${detailed ? "long" : "short"}|${prompt}`);
     const cacheTtl = Number(process.env.STREAM_CACHE_TTL_MS || 10 * 60 * 1000);
 
     const cached = cacheGet(cacheKey);
     if (cached) {
+      // renvoi rapide du cache (2 blocs pour éviter MTU)
       if (cached.length <= 400) sseWrite(res, { delta: cached });
-      else { const mid = Math.floor(cached.length / 2); sseWrite(res, { delta: cached.slice(0, mid) }); sseWrite(res, { delta: cached.slice(mid) }); }
-      sseWrite(res, { done: true }); clearInterval(hb); return res.end();
+      else {
+        const mid = Math.floor(cached.length / 2);
+        sseWrite(res, { delta: cached.slice(0, mid) });
+        sseWrite(res, { delta: cached.slice(mid) });
+      }
+      sseWrite(res, { done: true, mode: detailed ? "detailed" : "concise", cached: true });
+      clearInterval(hb);
+      return res.end();
     }
 
     const ac = new AbortController();
     const to = setTimeout(() => ac.abort("TIMEOUT"), Number(process.env.STREAM_TIMEOUT_MS || 15_000));
 
-    const stream = await openai.chat.completions.create(
-      { model: OPENAI_MODEL, stream: true, messages },
-      { signal: ac.signal }
-    );
+    const messages = buildMessagesFromPrompt(prompt);
+    const t0 = Date.now();
+    const stream = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      temperature: TEMPERATURE,
+      max_tokens: maxTokens,
+      stream: true,
+      messages
+    }, { signal: ac.signal });
 
     let fullText = "";
     for await (const chunk of stream) {
       const delta = chunk?.choices?.[0]?.delta?.content || "";
-      if (delta) { fullText += delta; sseWrite(res, { delta }); }
+      if (delta) {
+        fullText += delta;
+        sseWrite(res, { delta });
+        if (res.flush) res.flush(); // pousse vite au client
+      }
     }
 
     clearTimeout(to);
     if (fullText.trim()) cacheSet(cacheKey, fullText, cacheTtl);
 
-    sseWrite(res, { done: true });
+    sseWrite(res, { done: true, mode: detailed ? "detailed" : "concise", t_ms: Date.now() - t0 });
     clearInterval(hb);
     res.end();
   } catch (e) {
