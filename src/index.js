@@ -22,11 +22,11 @@ console.log(`[BOOT] cwd=${process.cwd()}`);
 const PORT = Number(process.env.PORT || 3000);
 
 // OpenAI
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
 // Réglages qualité/latence (surchargeables par .env)
 const MAX_TOKENS_SHORT = Number(process.env.MAX_TOKENS_SHORT || 600);   // mode rapide
@@ -161,6 +161,20 @@ Structure toujours en 4 blocs courts:
 4) Quand passer à la valise (1–2 lignes)
 Si l'utilisateur demande des "détails", tu peux développer davantage, sinon reste concis. Évite le blabla inutile.`;
 
+// ======== PARAMÈTRE TOKENS (auto-compatibilité modèles) ========
+// Certains modèles (4o/4.1/mini) refusent `max_tokens` et exigent `max_completion_tokens`.
+function needsMaxCompletionTokens(model = OPENAI_MODEL) {
+  const m = (model || "").toLowerCase();
+  // Heuristique sûre pour l'écosystème 4o / 4.1 / mini / o-series
+  return m.includes("gpt-4o") || m.includes("4.1") || m.includes("o-") || m.includes("mini");
+}
+function withMaxParam(obj, maxTokens) {
+  if (needsMaxCompletionTokens()) {
+    return { ...obj, max_completion_tokens: maxTokens };
+  }
+  return { ...obj, max_tokens: maxTokens };
+}
+
 // ======== HEALTH ========
 app.get("/healthz", async (_req, res) => {
   const base = { status: "ok", uptime: process.uptime(), port: PORT, db: pool ? "configuré" : "non_configuré" };
@@ -214,15 +228,16 @@ app.all("/api/diagnose", async (req, res) => {
 
   try {
     const t0 = Date.now();
-    const chat = await openai.chat.completions.create({
+    const params = withMaxParam({
       model: OPENAI_MODEL,
       temperature: TEMPERATURE,
-      max_tokens: maxTokens,
       messages: [
         { role: "system", content: SYSTEM_PROMPT_BASE },
         { role: "user", content: prompt }
       ]
-    });
+    }, maxTokens);
+
+    const chat = await openai.chat.completions.create(params);
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
     res
       .setHeader("X-Mode", detailed ? "detailed" : "concise")
@@ -242,15 +257,16 @@ app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => 
   const maxTokens = detailed ? MAX_TOKENS_LONG : MAX_TOKENS_SHORT;
 
   try {
-    const chat = await openai.chat.completions.create({
+    const params = withMaxParam({
       model: OPENAI_MODEL,
       temperature: TEMPERATURE,
-      max_tokens: maxTokens,
       messages: [
         { role: "system", content: SYSTEM_PROMPT_BASE },
         { role: "user", content: prompt }
       ]
-    });
+    }, maxTokens);
+
+    const chat = await openai.chat.completions.create(params);
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
     res.json({ text, mode: detailed ? "detailed" : "concise" });
   } catch (e) {
@@ -318,17 +334,18 @@ async function handleDiagnoseStream(req, res) {
     const ac = new AbortController();
     const to = setTimeout(() => ac.abort("TIMEOUT"), Number(process.env.STREAM_TIMEOUT_MS || 15_000));
 
-    const t0 = Date.now();
-    const stream = await openai.chat.completions.create({
+    const params = withMaxParam({
       model: OPENAI_MODEL,
       temperature: TEMPERATURE,
-      max_tokens: maxTokens,
       stream: true,
       messages: [
         { role: "system", content: SYSTEM_PROMPT_BASE },
         { role: "user", content: prompt }
       ]
-    }, { signal: ac.signal });
+    }, maxTokens);
+
+    const t0 = Date.now();
+    const stream = await openai.chat.completions.create(params, { signal: ac.signal });
 
     let fullText = "";
     for await (const chunk of stream) {
