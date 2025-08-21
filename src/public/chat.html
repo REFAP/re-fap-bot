@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Re-FAP assistant</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+    header { padding: 16px 20px; border-bottom: 1px solid #ddd; }
+    main { max-width: 900px; margin: 0 auto; padding: 16px; }
+    .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    #log { border: 1px solid #ddd; border-radius: 8px; padding: 12px; min-height: 240px; white-space: pre-wrap; }
+    .msg { margin: 0 0 8px; }
+    .you { color: #444; }
+    .bot { color: #0a7; }
+    .err { color: #b00; }
+    .small { font-size: 12px; opacity: .7; }
+    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #999; cursor: pointer; }
+    input, textarea {
+      padding: 10px 12px; border-radius: 8px; border: 1px solid #ccc; width: 100%;
+      font: inherit;
+    }
+    .hint { margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Re-FAP assistant</strong>
+  </header>
+
+  <main>
+    <div id="log" aria-live="polite"></div>
+
+    <div class="hint small">
+      Saisie un symptôme (ex : « Voyant moteur 308 HDi 2014 »), puis “Envoyer”.
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <input id="q" placeholder="Décris le symptôme…" />
+      <button id="send">Envoyer</button>
+    </div>
+
+    <div class="small hint">
+      Streaming via <code>/api/diagnose/stream</code> (GET SSE).  
+      Si le streaming n’est pas disponible, on basculera en réponse non-stream.
+    </div>
+  </main>
+
+  <script>
+    const log = document.getElementById('log');
+    const q   = document.getElementById('q');
+    const btn = document.getElementById('send');
+
+    function append(text, cls='') {
+      const p = document.createElement('div');
+      p.className = 'msg ' + cls;
+      p.textContent = text;
+      log.appendChild(p);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    async function send() {
+      const text = q.value.trim();
+      if (!text) return;
+      q.value = '';
+      append('Toi: ' + text, 'you');
+
+      // 1) Tentative SSE (GET)
+      try {
+        const url = '/api/diagnose/stream?q=' + encodeURIComponent(text);
+        const es  = new EventSource(url);
+
+        let gotChunk = false;
+
+        es.onmessage = (ev) => {
+          try {
+            const data = JSON.parse(ev.data);
+            if (data.delta) { append(data.delta, 'bot'); gotChunk = true; }
+            if (data.done)  { es.close(); }
+            if (data.error) { append('Erreur: ' + data.error, 'err'); es.close(); }
+          } catch {}
+        };
+        es.onerror = () => { es.close(); };
+        es.onopen  = () => {};
+
+        // Sécurité : si au bout de 2,5s on n’a rien reçu, on tente le fallback non-stream
+        setTimeout(async () => {
+          if (!gotChunk) {
+            try { es.close(); } catch {}
+            await fallbackREST(text);
+          }
+        }, 2500);
+
+        return;
+      } catch(e) {
+        // 2) Fallback direct si SSE indisponible
+        await fallbackREST(text);
+      }
+    }
+
+    async function fallbackREST(text) {
+      try {
+        const r = await fetch('/api/admin/rag/diagnose', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ prompt: text })
+        });
+        const j = await r.json();
+        if (j?.text) append(j.text, 'bot');
+        else append('Erreur: ' + (j?.error || 'réponse vide'), 'err');
+      } catch(e) {
+        append('Erreur réseau: ' + e.message, 'err');
+      }
+    }
+
+    btn.onclick = send;
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+
+    // Message de bienvenue
+    append('Bot: Salut ! Décris ton symptôme et je t’aide à diagnostiquer.', 'bot');
+  </script>
+</body>
+</html>
