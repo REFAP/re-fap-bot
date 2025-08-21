@@ -185,7 +185,17 @@
   }
 
   function renderCTAs(payload){
-    if (!payload) return;
+    if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
+  for (const item of payload.cta.items.slice(0,2)) {
+    const b = document.createElement("button");
+    b.textContent = item.label || "Action";
+    b.className = "btn-outline";
+    b.onclick = () => { if (item.url) window.location.href = item.url; };
+    ctas.appendChild(b);
+  }
+}
+
+if (!payload) return;
     ctas.innerHTML = "";
 
     // CTA proposés par le serveur / modèle
