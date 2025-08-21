@@ -67,6 +67,16 @@ app.use(
     },
   })
 );
+// ======== HEALTHCHECK ========
+app.get("/healthz", (_req, res) => {
+  console.log("[HEALTHZ] hit");
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    port: PORT,
+    db: pool ? "configured" : "disabled",
+  });
+});
 
 // ======== MINI-CACHE TTL (mémoire) ========
 const _cache = new Map();
@@ -97,15 +107,14 @@ function sseHeartbeat(res) {
 } // commentaire SSE
 
 // ======== HEALTHCHECK ========
-app.get("/healthz", async (_req, res) => {
-  const payload = { status: "ok", uptime: process.uptime(), port: PORT };
-  if (!pool) return res.status(200).json(payload);
-  try {
-    await pool.query("select 1");
-    return res.status(200).json(payload);
-  } catch {
-    return res.status(503).json({ status: "db_error" });
-  }
+// ======== HEALTHCHECK ========
+app.get("/healthz", (_req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    port: PORT,
+    db: pool ? "configured" : "disabled", // purement informatif
+  });
 });
 
 // ======== STATIC (optionnel) ========
