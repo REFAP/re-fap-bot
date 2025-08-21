@@ -20,9 +20,12 @@
     .hint{color:var(--muted);font-size:12px}
     .cta{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
     .btn-outline{background:#fff;color:var(--fg)}
+    /* Questions en valeur */
     .questions{margin:10px 0 0 0;padding-left:18px}
     .questions li{margin:4px 0}
     .ask{color:var(--accent);font-weight:700}
+    .qtitle{color:var(--accent);font-weight:700;margin:12px 0 6px}
+    /* Modal */
     .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
     .modal.open{display:flex}
     .modal .box{background:#fff;border-radius:12px;padding:20px;max-width:560px;width:100%;border:1px solid var(--border)}
@@ -175,15 +178,12 @@
         if (myToken === currentToken) { btn.disabled = false; state.textContent = ""; }
       }
 
-      // si un autre envoi a démarré entre temps, on abandonne ce rendu
       if (myToken !== currentToken) return;
 
-      // récupérer payload (questions/CTA) UNE fois
       try {
         const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(effectivePrompt)}`);
         if (r.ok) {
           const j = await r.json();
-          // sécurité anti-doublons inter-rendu
           if (myToken !== currentToken) return;
           ctas.innerHTML = "";
           renderQuestions(j?.payload?.next_questions);
@@ -223,7 +223,7 @@
       es.onmessage = (e) => {
         try {
           const o = JSON.parse(e.data);
-        if (o.error) { es.close(); clearTimeout(watchdog); reject(new Error(o.error)); return; }
+          if (o.error) { es.close(); clearTimeout(watchdog); reject(new Error(o.error)); return; }
           if (o.delta) { out.textContent += o.delta; received = true; }
           if (o.done)  { es.close(); clearTimeout(watchdog); resolve(); return; }
         } catch {
@@ -251,6 +251,8 @@
 
   function renderQuestions(nextQuestions){
     if (!Array.isArray(nextQuestions)) return;
+
+    // dédup insensible à la casse
     const seen = new Set();
     const cleaned = nextQuestions
       .map(s => String(s || "").trim())
@@ -260,7 +262,16 @@
         if (seen.has(key)) return false;
         seen.add(key); return true;
       });
+
     if (!cleaned.length) return;
+
+    // bloc questions + titre
+    const block = document.createElement("div");
+
+    const title = document.createElement("div");
+    title.className = "qtitle";
+    title.textContent = "Voici quelques questions pour affiner le diagnostic et t’aider à trouver la bonne solution :";
+    block.appendChild(title);
 
     const ul = document.createElement("ul");
     ul.className = "questions";
@@ -268,7 +279,9 @@
       const li = document.createElement("li"); li.className = "ask"; li.textContent = q;
       ul.appendChild(li);
     });
-    ctas.appendChild(ul);
+    block.appendChild(ul);
+
+    ctas.appendChild(block);
   }
 
   function renderCTAs(payload){
