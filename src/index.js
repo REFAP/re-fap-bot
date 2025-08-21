@@ -1,4 +1,4 @@
-// index.js
+// src/index.js
 // ======== BOOT ========
 import "dotenv/config";
 import path from "node:path";
@@ -21,17 +21,22 @@ console.log(`[BOOT] cwd=${process.cwd()}`);
 // ======== CONFIG / ENV ========
 const PORT = Number(process.env.PORT || 3000);
 
-// OpenAI
+// OpenAI (API + modèle + température)
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const OPENAI_TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE ?? 1);
+/**
+ * Certains modèles n’acceptent que la valeur par défaut (=1).
+ * On n’envoie le champ `temperature` que si ≠ 1.
+ */
+const tempField = OPENAI_TEMPERATURE !== 1 ? { temperature: OPENAI_TEMPERATURE } : {};
 
-// DB
+// DB (optionnelle)
 const DATABASE_URL = process.env.DATABASE_URL;
-let pool = null;
+let pool: Pool | null = null;
 if (!DATABASE_URL) {
   console.warn("⚠️  DATABASE_URL manquant. Les routes DB avanceront en mode dégradé.");
 } else {
@@ -52,12 +57,12 @@ https.globalAgent.keepAlive = true;
 // ======== APP ========
 const app = express();
 app.use(cors());
+// JSON + x-www-form-urlencoded
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-// Permettre POST texte brut pour nos tests tolérants
+// Texte brut (pour POST text/plain tolérant)
 app.use(express.text({ type: "text/*", limit: "1mb" }));
-
-// Ne PAS compresser le SSE, sinon certaines stacks reset la connexion
+// Compression, mais JAMAIS pour le SSE
 app.use(
   compression({
     filter: (req, res) => {
@@ -68,19 +73,10 @@ app.use(
     },
   })
 );
-// ======== HEALTHCHECK ========
-app.get("/healthz", (_req, res) => {
-  console.log("[HEALTHZ] hit");
-  res.status(200).json({
-    status: "ok",
-    uptime: process.uptime(),
-    port: PORT,
-    db: pool ? "configured" : "disabled",
-  });
-});
 
 // ======== MINI-CACHE TTL (mémoire) ========
 const _cache = new Map();
+/** @param {string} k */
 function cacheGet(k) {
   const h = _cache.get(k);
   if (!h) return null;
@@ -91,10 +87,11 @@ function cacheGet(k) {
   }
   return value;
 }
+/** @param {string} k @param {string} v @param {number} ttlMs */
 function cacheSet(k, v, ttlMs = 10 * 60 * 1000) {
-  // 10 min par défaut
   _cache.set(k, { value: v, exp: Date.now() + ttlMs });
 }
+/** @param {string} s */
 function norm(s) {
   return (s || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -104,21 +101,32 @@ function sseWrite(res, payload) {
   res.write(`data:${JSON.stringify(payload)}\n\n`);
 }
 function sseHeartbeat(res) {
+  // Commentaires SSE (non pris en compte côté client) mais gardent la connexion vivante
   res.write(`:hb ${Date.now()}\n\n`);
-} // commentaire SSE
+}
 
 // ======== HEALTHCHECK ========
-// ======== HEALTHCHECK ========
-app.get("/healthz", (_req, res) => {
-  res.status(200).json({
+// ⚠️ Toujours 200 pour ne pas bloquer le déploiement Render
+app.get("/healthz", async (_req, res) => {
+  const payload = {
     status: "ok",
     uptime: process.uptime(),
     port: PORT,
-    db: pool ? "configured" : "disabled", // purement informatif
-  });
+    db: pool ? "configured" : "missing",
+  };
+  if (pool) {
+    try {
+      await pool.query("select 1");
+      payload.db_ok = true;
+    } catch (e) {
+      payload.db_ok = false;
+    }
+  }
+  return res.status(200).json(payload);
 });
 
 // ======== STATIC (optionnel) ========
+// Servez public/ si présent (ex.: /stream.html pour tester le SSE)
 app.use(express.static(path.join(__dirname, "public")));
 
 // ======== ADMIN (stubs utiles) ========
@@ -126,6 +134,7 @@ app.get("/api/admin/guess", (_req, res) => {
   res.json({
     ok: true,
     model: OPENAI_MODEL,
+    temperature: OPENAI_TEMPERATURE,
     db: Boolean(pool),
     time: new Date().toISOString(),
   });
@@ -148,20 +157,13 @@ app.get("/api/admin/schema", async (_req, res) => {
 });
 
 app.post("/api/admin/rag/diagnose", async (req, res) => {
-  const opts = {
-  model: OPENAI_MODEL,
-  messages: [
-    { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
-    { role: "user", content: prompt },
-  ],
-};
-// n'ajoute temperature que si ≠ 1
-if (OPENAI_TEMPERATURE !== 1) opts.temperature = OPENAI_TEMPERATURE;
-
-const chat = await openai.chat.completions.create(opts);
-
+  const {
+    prompt = "Diagnostic rapide FAP : résume les étapes de contrôle.",
+  } = req.body || {};
+  try {
+    const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      temperature,
+      ...tempField, // ne pas envoyer temperature si == 1
       messages: [
         { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
         { role: "user", content: prompt },
@@ -170,7 +172,8 @@ const chat = await openai.chat.completions.create(opts);
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
     res.json({ text });
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+    const msg = e?.response?.data || e?.message || String(e);
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -203,13 +206,14 @@ app.get("/debug/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
   let i = 0;
   const iv = setInterval(() => {
     i += 1;
     sseWrite(res, { delta: `tick-${i}` });
-    if (i >= 5) {	
+    if (i >= 5) {
       sseWrite(res, { done: true });
       clearInterval(iv);
       res.end();
@@ -220,12 +224,13 @@ app.get("/debug/stream", (req, res) => {
 });
 
 // ======== STREAMING DIAGNOSE (SSE) ========
-// POST (JSON ou texte) + GET (?q=...) → même logique.
+// POST (JSON/texte) + GET (?q=...) → même logique
 async function handleDiagnoseStream(req, res) {
   // Headers SSE
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
   // Heartbeat pour garder la connexion ouverte (Render/Proxies)
@@ -265,16 +270,13 @@ async function handleDiagnoseStream(req, res) {
     const to = setTimeout(() => ac.abort("TIMEOUT"), timeoutMs);
 
     // Appel OpenAI en stream
-   const opts = {
-  model: OPENAI_MODEL,
-  stream: true,
-  messages,
-};
-// n'ajoute temperature que si ≠ 1
-if (OPENAI_TEMPERATURE !== 1) opts.temperature = OPENAI_TEMPERATURE;
-
-const stream = await openai.chat.completions.create(opts);
-
+    const stream = await openai.chat.completions.create(
+      {
+        model: OPENAI_MODEL,
+        stream: true,
+        ...tempField, // ne pas envoyer temperature si == 1
+        messages,
+      },
       { signal: ac.signal }
     );
 
@@ -298,7 +300,10 @@ const stream = await openai.chat.completions.create(opts);
     clearInterval(hb);
     return res.end();
   } catch (e) {
-    const msg = e?.message ? String(e.message) : String(e);
+    const msg =
+      e?.response?.data?.error?.message ||
+      e?.message ||
+      String(e);
     sseWrite(res, { error: msg });
     clearInterval(hb);
     return res.end();
