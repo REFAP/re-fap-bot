@@ -25,6 +25,7 @@ const PORT = Number(process.env.PORT || 3000);
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+  organization: process.env.OPENAI_ORG_ID || undefined, // facultatif
 });
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
@@ -44,6 +45,7 @@ if (!DATABASE_URL) {
 }
 
 // ======== PERF RÉSEAU ========
+// Garde les connexions HTTP/HTTPS ouvertes → latence ↓
 http.globalAgent.keepAlive = true;
 https.globalAgent.keepAlive = true;
 
@@ -52,9 +54,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
+// POST texte brut toléré
 app.use(express.text({ type: "text/*", limit: "1mb" }));
 
-// Ne pas compresser le SSE
+// Ne PAS compresser le SSE, sinon certaines stacks reset la connexion
 app.use(
   compression({
     filter: (req, res) => {
@@ -68,7 +71,7 @@ app.use(
 
 // ======== MINI-CACHE TTL (mémoire) ========
 const _cache = new Map();
-const cacheGet = (k) => {
+function cacheGet(k) {
   const h = _cache.get(k);
   if (!h) return null;
   const { value, exp } = h;
@@ -77,18 +80,26 @@ const cacheGet = (k) => {
     return null;
   }
   return value;
-};
-const cacheSet = (k, v, ttlMs = 10 * 60 * 1000) => _cache.set(k, { value: v, exp: Date.now() + ttlMs });
-const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+function cacheSet(k, v, ttlMs = 10 * 60 * 1000) {
+  _cache.set(k, { value: v, exp: Date.now() + ttlMs });
+}
+function norm(s) {
+  return (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
 
 // ======== UTILS SSE ========
-const sseWrite = (res, payload) => res.write(`data:${JSON.stringify(payload)}\n\n`);
-const sseHeartbeat = (res) => res.write(`:hb ${Date.now()}\n\n`);
+function sseWrite(res, payload) {
+  res.write(`data:${JSON.stringify(payload)}\n\n`);
+}
+function sseHeartbeat(res) {
+  res.write(`:hb ${Date.now()}\n\n`);
+} // commentaire SSE
 
 // ======== HEALTHCHECK ========
 app.get("/healthz", async (_req, res) => {
   const payload = { status: "ok", uptime: process.uptime(), port: PORT };
-  if (!pool) return res.status(200).json({ ...payload, db: "not_configured", db_ok: false });
+  if (!pool) return res.status(200).json({ ...payload, db: "configured", db_ok: false });
   try {
     await pool.query("select 1");
     return res.status(200).json({ ...payload, db: "configured", db_ok: true });
@@ -100,14 +111,39 @@ app.get("/healthz", async (_req, res) => {
 // ======== STATIC ========
 app.use(express.static(path.join(__dirname, "public")));
 
-// ======== ADMIN (stubs) ========
+// ======== ADMIN (stubs utiles) ========
 app.get("/api/admin/guess", (_req, res) => {
-  res.json({ ok: true, model: OPENAI_MODEL, db: Boolean(pool), time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    model: OPENAI_MODEL,
+    db: Boolean(pool),
+    time: new Date().toISOString(),
+  });
 });
 
-// ======== HELPERS PARSING ========
+app.get("/api/admin/schema", async (_req, res) => {
+  if (!pool) return res.status(503).json({ error: "DB not configured" });
+  try {
+    const q = `
+      select table_schema, table_name
+      from information_schema.tables
+      where table_type='BASE TABLE' and table_schema not in ('pg_catalog','information_schema')
+      order by table_schema, table_name;
+    `;
+    const { rows } = await pool.query(q);
+    res.json({ tables: rows });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ======== HELPERS PARSING MESSAGES (tolérant) ========
 function parseMessages(req) {
-  if (req.is("application/json") && Array.isArray(req.body?.messages)) return req.body.messages;
+  // 1) JSON { messages: [...] }
+  if (req.is("application/json") && Array.isArray(req.body?.messages)) {
+    return req.body.messages;
+  }
+  // 2) GET ?q=...
   const q = (req.query?.q ?? "").toString().trim();
   if (q) {
     return [
@@ -115,6 +151,7 @@ function parseMessages(req) {
       { role: "user", content: q },
     ];
   }
+  // 3) POST texte brut
   if (typeof req.body === "string" && req.body.trim()) {
     return [
       { role: "system", content: "Tu es un mécano expérimenté. Réponds en français, clair et direct." },
@@ -129,6 +166,7 @@ app.get("/debug/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
   let i = 0;
@@ -146,12 +184,19 @@ app.get("/debug/stream", (req, res) => {
 });
 
 // ======== STREAMING DIAGNOSE (SSE) ========
+// POST (JSON ou texte) + GET (?q=...) → même logique.
+app.post("/api/diagnose/stream", handleDiagnoseStream);
+app.get("/api/diagnose/stream", handleDiagnoseStream);
+
 async function handleDiagnoseStream(req, res) {
+  // Headers SSE
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
+  // Heartbeat pour garder la connexion ouverte (Render/Proxies)
   const hb = setInterval(() => sseHeartbeat(res), 15_000);
   req.on("close", () => clearInterval(hb));
 
@@ -163,69 +208,120 @@ async function handleDiagnoseStream(req, res) {
       return res.end();
     }
 
+    // --- Cache: clé = messages normalisés ---
     const cacheKey = norm(JSON.stringify(messages));
     const cacheTtl = Number(process.env.STREAM_CACHE_TTL_MS || 10 * 60 * 1000);
+
+    // Hit cache → rejouer immédiatement (UX rapide)
     const cached = cacheGet(cacheKey);
     if (cached) {
-      if (cached.length <= 400) sseWrite(res, { delta: cached });
-      else {
-        const mid = Math.floor(cached.length / 2);
-        sseWrite(res, { delta: cached.slice(0, mid) });
-        sseWrite(res, { delta: cached.slice(mid) });
-      }
-      sseWrite(res, { done: true });
+      replayTextAsSSE(cached, res);
       clearInterval(hb);
       return res.end();
     }
 
-    // Timeout dur
-    const timeoutMs = Number(process.env.STREAM_TIMEOUT_MS || 15_000);
+    // --- Timeout dur sur l’appel modèle ---
+    const timeoutMs = Number(process.env.STREAM_TIMEOUT_MS || 20_000);
     const ac = new AbortController();
     const to = setTimeout(() => ac.abort("TIMEOUT"), timeoutMs);
 
-    // 👉 Pas de "temperature" envoyé (certains modèles n’acceptent que la valeur par défaut)
-    const stream = await openai.chat.completions.create(
-      { model: OPENAI_MODEL, stream: true, messages },
-      { signal: ac.signal }
-    );
-
+    // ========= Tentative 1 : STREAM côté OpenAI =========
     let fullText = "";
-    for await (const chunk of stream) {
-      const delta = chunk?.choices?.[0]?.delta?.content || "";
-      if (delta) {
-        fullText += delta;
-        sseWrite(res, { delta });
+    try {
+      const stream = await openai.chat.completions.create(
+        {
+          model: OPENAI_MODEL,
+          stream: true,
+          // ⚠️ ne pas envoyer "temperature" (certains modèles n'acceptent que la valeur par défaut)
+          messages,
+        },
+        { signal: ac.signal }
+      );
+
+      for await (const chunk of stream) {
+        const delta = chunk?.choices?.[0]?.delta?.content || "";
+        if (delta) {
+          fullText += delta;
+          sseWrite(res, { delta });
+        }
       }
+    } catch (err) {
+      // Si on a une erreur de vérification org / 4xx → fallback non-stream
+      const msg = (err && err.message) ? String(err.message) : String(err);
+      const isOrgVerify =
+        /must be verified to stream this model/i.test(msg) ||
+        /organization.*verified/i.test(msg);
+      const is4xx = /status\s*code\s*4\d\d/i.test(msg) || /400|401|403|404/.test(msg);
+
+      if (isOrgVerify || is4xx) {
+        // ========= Fallback : NON-STREAM côté OpenAI, re-stream côté serveur =========
+        const resp = await openai.chat.completions.create(
+          {
+            model: OPENAI_MODEL,
+            messages,
+            // pas de temperature
+          },
+          { signal: ac.signal }
+        );
+        fullText = resp.choices?.[0]?.message?.content?.trim() || "";
+        replayTextAsSSE(fullText, res);
+      } else {
+        throw err; // autres erreurs → gestion générique
+      }
+    } finally {
+      clearTimeout(to);
     }
 
-    clearTimeout(to);
-    if (fullText && fullText.trim()) cacheSet(cacheKey, fullText, cacheTtl);
+    // Cache
+    if (fullText && fullText.trim()) {
+      cacheSet(cacheKey, fullText, cacheTtl);
+    }
 
     sseWrite(res, { done: true });
     clearInterval(hb);
-    res.end();
+    return res.end();
   } catch (e) {
-    sseWrite(res, { error: String(e?.message || e) });
+    const msg = (e && e.message) ? String(e.message) : String(e);
+    sseWrite(res, { error: msg });
     clearInterval(hb);
-    res.end();
+    return res.end();
   }
 }
-app.post("/api/diagnose/stream", handleDiagnoseStream);
-app.get("/api/diagnose/stream", handleDiagnoseStream);
 
-// ======== ROOT (landing page) ========
+// Découpe un texte et le renvoie en plusieurs events SSE
+function replayTextAsSSE(text, res) {
+  if (!text) return;
+  const CHUNK = 400; // taille raisonnable
+  for (let i = 0; i < text.length; i += CHUNK) {
+    sseWrite(res, { delta: text.slice(i, i + CHUNK) });
+  }
+}
+
+// ======== ROOT ========
 app.get("/", (_req, res) => {
   res.type("html").send(`<!doctype html>
-<html lang="fr"><meta charset="utf-8"/>
-<title>Re-FAP bot</title>
-<body style="font-family:system-ui;margin:2rem;line-height:1.5">
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Re-FAP Bot</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; line-height:1.5; padding: 28px; }
+    h1 { font-size: 2.2rem; margin-bottom: 0.2rem; }
+    a { color: #2b6cb0; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ul { margin-top: 0.6rem; }
+  </style>
+</head>
+<body>
   <h1>Re-FAP Bot</h1>
   <p>Service OK. Outils utiles :</p>
   <ul>
     <li><a href="/healthz">/healthz</a></li>
     <li><a href="/stream.html">/stream.html</a> (page de test, si présente)</li>
   </ul>
-</body></html>`);
+</body>
+</html>`);
 });
 
 // ======== START ========
@@ -248,5 +344,8 @@ app.get("/", (_req, res) => {
       console.warn("⚠️  PostgreSQL init warning:", e.message || e);
     }
   }
-  app.listen(PORT, () => console.log(`🚀 Server up on :${PORT}`));
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server up on :${PORT}`);
+  });
 })();
