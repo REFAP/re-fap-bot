@@ -26,7 +26,7 @@ const openai = new OpenAI({
 const DATABASE_URL = process.env.DATABASE_URL;
 let pool = null;
 if (!DATABASE_URL) {
-  console.warn("⚠️  DATABASE_URL manquant : les endpoints /api/leads/* répondent 503.");
+  console.warn("⚠️  DATABASE_URL manquant : les endpoints /api/leads/* répondront 503.");
 } else {
   pool = new Pool({
     connectionString: DATABASE_URL,
@@ -35,7 +35,6 @@ if (!DATABASE_URL) {
     allowExitOnIdle: false,
     ssl: DATABASE_URL.includes("supabase") ? { rejectUnauthorized: false } : undefined,
   });
-  // Création table minimale si absente
   (async () => {
     try {
       await pool.query(`
@@ -136,8 +135,8 @@ Règles :
 
 - Si le message utilisateur contient une section commençant par "Contexte véhicule",
   considère ces éléments (marque, modèle, année/moteur, kilométrage, type d’usage, code postal,
-  codes OBD/DTC, observations) comme DÉJÀ FOURNIS : ne les redemande pas, ne les re-formule pas
-  longuement ; pose uniquement les questions qui manquent et sont utiles au diagnostic.
+  codes OBD/DTC, observations) comme DÉJÀ FOURNIS : ne les redemande pas et ne les re-formule pas longuement ;
+  pose uniquement les questions utiles qui manquent.
 
 - Ne JAMAIS pousser un CTA avant d'avoir expliqué, posé 1–2 questions utiles et tenté de collecter
   des infos lead (si l'utilisateur est réceptif).
@@ -145,12 +144,28 @@ Règles :
 - Bascule CTA si confiance ≥ 0.65 OU symptômes “rouges”, ET lead minimal (marque+modèle+année ou immat, + CP ou moyen de rappel).
 - Si l'utilisateur demande des "détails" (#details), développe davantage sans blabla.`;
 
+// 👉 Manquait chez toi
+const PAYLOAD_INSTRUCTION = `FORMAT DE SORTIE (réponses non-stream) :
+Après ta réponse en 4 blocs, ajoute EXACTEMENT :
+<PAYLOAD>{
+  "confidence": 0.0,
+  "probable_causes": [],
+  "next_questions": [],
+  "lead_missing": ["brand","model","year","engine","mileage_km","postal_code","contact"],
+  "cta": { "show": false, "items": [] }
+}</PAYLOAD>
+Contraintes :
+- confidence ∈ [0,1]
+- next_questions : 1 à 3 questions courtes
+- Si CTA pertinent selon les règles, "cta.show": true et propose 1–2 items (booking/callback/produit).
+- N’ajoute pas d’autres champs dans le JSON.`;
+
 // ---------- Health ----------
 app.get("/healthz", (_req, res) =>
   res.json({ status:"ok", model: OPENAI_MODEL, branch: process.env.RENDER_GIT_BRANCH || null, db: !!pool })
 );
 
-// ---------- Leads intake (facultatif) ----------
+// ---------- Leads intake ----------
 app.post("/api/leads/intake", async (req, res) => {
   if (!pool) return res.status(503).json({ error: "DB_NOT_CONFIGURED" });
   const body = typeof req.body === "string" ? tryParseJSON(req.body) || {} : (req.body || {});
@@ -172,7 +187,7 @@ app.post("/api/leads/intake", async (req, res) => {
   }
 });
 
-// ---------- Leads callback (facultatif) ----------
+// ---------- Leads callback ----------
 app.post("/api/leads/callback", async (req, res) => {
   if (!pool) return res.status(503).json({ error: "DB_NOT_CONFIGURED" });
   const body = typeof req.body === "string" ? tryParseJSON(req.body) || {} : (req.body || {});
@@ -220,8 +235,52 @@ app.all("/api/diagnose", async (req, res) => {
       ],
       lead_missing: ["brand","model","year","engine","mileage_km","postal_code","contact"],
       cta: { show: false, items: [] }
-    };	
+    };
     const text = stripPayloadBlock(raw);
+
+    // --- Filtrer les questions déjà couvertes si "Contexte véhicule" présent
+    try {
+      const hasCtx = /Contexte véhicule fourni/i.test(userPrompt);
+      if (hasCtx && Array.isArray(payload.next_questions)) {
+        const already = {
+          marque: /marque=/i.test(userPrompt),
+          modele: /mod[èe]le=/i.test(userPrompt),
+          moteur: /moteur=/i.test(userPrompt),
+          annee: /ann[ée]e=/i.test(userPrompt),
+          dtc: /code\s*DTC=/i.test(userPrompt) || /code\s*OBD/i.test(userPrompt),
+          cp: /(code\s*postal|CP)=/i.test(userPrompt),
+          notes: /observations=/i.test(userPrompt),
+        };
+        const killIf = [
+          already.marque  && /marque/i,
+          already.modele  && /mod[èe]le/i,
+          already.moteur  && /moteur/i,
+          already.annee   && /ann[ée]e/i,
+          already.dtc     && /(DTC|OBD|code)/i,
+          already.cp      && /(code postal|CP)/i,
+          already.notes   && /observations?/i,
+        ].filter(Boolean);
+        payload.next_questions = payload.next_questions.filter(q =>
+          !killIf.some(rx => rx.test(q))
+        );
+      }
+    } catch {}
+
+    // --- Heuristique CTA côté serveur
+    const hasAny = (s, arr) => (s || "").toLowerCase() && arr.some(k => (s || "").toLowerCase().includes(k));
+    const suggestCTA =
+      (payload.confidence ?? 0) >= 0.65 ||
+      hasAny(text, ["mode dégradé","p024","p0299","p030","p0401","p0420","p242f","p2463","p2452","p244c","capteur pression différentiel","fap","egr"]);
+    if (suggestCTA) {
+      payload.cta = payload.cta || {};
+      payload.cta.show = true;
+      if (!payload.cta.items || !payload.cta.items.length) {
+        payload.cta.items = [
+          { type: "booking",  label: "Prendre RDV diagnostic",         url: "/rdv" },
+          { type: "callback", label: "Être rappelé par un conseiller", url: "/rappel" }
+        ];
+      }
+    }
 
     res.json({ text: text.trim(), payload, mode: "concise" });
   } catch (e) {
@@ -275,7 +334,6 @@ app.post("/api/diagnose/stream", handleDiagnoseStream);
 app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => {
   const promptRaw = (req.query?.prompt || req.query?.q || (typeof req.body === "string" ? req.body : req.body?.prompt) || "").toString();
   if (!promptRaw) return res.status(400).json({ error: "MISSING_PROMPT" });
-
   try {
     const chat = await openai.chat.completions.create({
       model: OPENAI_MODEL,
@@ -285,22 +343,7 @@ app.all(["/api/admin/rag/diagnose", "/api/admin/diagnose"], async (req, res) => 
       ]
     });
     const text = chat.choices?.[0]?.message?.content?.trim() || "";
-    // Heuristique simple : si le texte évoque des cas courants sérieux → CTA on
-function hasAny(s, arr){ s = (s||"").toLowerCase(); return arr.some(k => s.includes(k)); }
-const suggestCTA =
-  (payload.confidence ?? 0) >= 0.65 ||
-  hasAny(text, ["mode dégradé","p024","p0299","p030","p0401","p0420","p242f","p2463","p2452","p244c","capteur pression différentiel","fap","egr"]);
-
-if (suggestCTA) {
-  payload.cta = payload.cta || {};
-  payload.cta.show = true;
-  payload.cta.items = payload.cta.items?.length ? payload.cta.items : [
-    { type: "booking",  label: "Prendre RDV diagnostic",           url: "/rdv" },
-    { type: "callback", label: "Être rappelé par un conseiller",   url: "/rappel" }
-  ];
-}
-
-res.json({ text, mode: "concise", legacy: true });
+    res.json({ text, mode: "concise", legacy: true });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
