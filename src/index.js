@@ -133,25 +133,17 @@ Règles :
   2) Vérifs prioritaires (3–5 puces, accessibles si possible)
   3) Actions immédiates (3–5 puces)
   4) Quand passer à la valise (1–2 lignes)
-- Ne JAMAIS pousser un CTA avant d'avoir expliqué, posé 1–2 questions et tenté de collecter des infos lead (si l'utilisateur est réceptif).
+
+- Si le message utilisateur contient une section commençant par "Contexte véhicule",
+  considère ces éléments (marque, modèle, année/moteur, kilométrage, type d’usage, code postal,
+  codes OBD/DTC, observations) comme DÉJÀ FOURNIS : ne les redemande pas, ne les re-formule pas
+  longuement ; pose uniquement les questions qui manquent et sont utiles au diagnostic.
+
+- Ne JAMAIS pousser un CTA avant d'avoir expliqué, posé 1–2 questions utiles et tenté de collecter
+  des infos lead (si l'utilisateur est réceptif).
 - Collecte lead discrète : marque, modèle, année/moteur, km, usage, CP, codes OBD si connus.
 - Bascule CTA si confiance ≥ 0.65 OU symptômes “rouges”, ET lead minimal (marque+modèle+année ou immat, + CP ou moyen de rappel).
 - Si l'utilisateur demande des "détails" (#details), développe davantage sans blabla.`;
-
-const PAYLOAD_INSTRUCTION = `FORMAT DE SORTIE (réponses non-stream) :
-Après ta réponse en 4 blocs, ajoute EXACTEMENT :
-<PAYLOAD>{
-  "confidence": 0.0,
-  "probable_causes": [],
-  "next_questions": [],
-  "lead_missing": ["brand","model","year","engine","mileage_km","postal_code","contact"],
-  "cta": { "show": false, "items": [] }
-}</PAYLOAD>
-Contraintes :
-- confidence ∈ [0,1]
-- next_questions : 1 à 3 questions courtes
-- Si CTA pertinent selon les règles, "cta.show": true et propose 1–2 items (booking/callback/produit).
-- N’ajoute pas d’autres champs dans le JSON.`;
 
 // ---------- Health ----------
 app.get("/healthz", (_req, res) =>
