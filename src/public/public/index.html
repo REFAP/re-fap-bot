@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Re-FAP Bot (MVP)</title>
+  <style>
+    body { font-family: system-ui, Arial; margin: 20px; max-width: 720px; }
+    .row { display:flex; gap:8px; }
+    textarea { width:100%; height:90px; }
+    button { padding:10px 16px; }
+    .msg { border:1px solid #ddd; border-radius:8px; padding:10px; margin:10px 0; }
+    .user { background:#f6f8fa; }
+    .assistant { background:#eef6ff; }
+  </style>
+</head>
+<body>
+  <h1>Re-FAP Bot — MVP</h1>
+
+  <div class="row">
+    <textarea id="q" placeholder="Ex: Peugeot 3008, voyant FAP allumé et perte de puissance à Lyon 69003."></textarea>
+    <button id="send">Envoyer</button>
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+    const log = document.getElementById('log');
+    function add(role, text) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + role;
+      div.textContent = text;
+      log.prepend(div);
+    }
+
+    document.getElementById('send').onclick = async () => {
+      const user_input = document.getElementById('q').value.trim();
+      if (!user_input) return;
+      add('user', user_input);
+      document.getElementById('q').value = '';
+
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ user_input })
+      });
+      const data = await res.json();
+      add('assistant', data.answer || '(pas de réponse)');
+    };
+  </script>
+</body>
+</html>
