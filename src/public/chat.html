@@ -5,21 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Re-FAP assistant</title>
   <style>
-    body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:24px;background:#fafafa;color:#111}
+    :root{--fg:#111;--muted:#6b7280;--border:#e5e7eb;--bg:#fafafa;--brand:#111;--accent:#0b5}
+    *{box-sizing:border-box}
+    body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:24px;background:var(--bg);color:var(--fg)}
     .wrap{max-width:980px;margin:0 auto}
-    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px}
-    textarea,input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px}
-    button{padding:10px 16px;border:1px solid #111;border-radius:10px;background:#111;color:#fff;cursor:pointer}
+    .card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:20px}
+    h2{margin:0 0 6px 0}
+    textarea,input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;font-size:16px}
+    button{padding:10px 16px;border:1px solid var(--brand);border-radius:10px;background:var(--brand);color:#fff;cursor:pointer}
     button:disabled{opacity:.6;cursor:not-allowed}
-    pre{white-space:pre-wrap;word-wrap:break-word}
+    pre{white-space:pre-wrap;word-wrap:break-word;margin:8px 0 0}
     .row{display:flex;gap:10px}
     .col{flex:1}
-    .hint{color:#6b7280;font-size:12px}
+    .hint{color:var(--muted);font-size:12px}
     .cta{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+    .btn-outline{background:#fff;color:var(--fg)}
     /* Modal */
-    .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:16px}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
     .modal.open{display:flex}
-    .modal .box{background:#fff;border-radius:12px;padding:20px;max-width:560px;width:100%;border:1px solid #e5e7eb}
+    .modal .box{background:#fff;border-radius:12px;padding:20px;max-width:560px;width:100%;border:1px solid var(--border)}
     .modal h3{margin-top:0}
     .modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
   </style>
@@ -54,7 +58,7 @@
       <div class="row" style="margin-top:8px"><div class="col"><input id="dtc" placeholder="Code erreur OBD (DTC) si connu"></div><div class="col"><input id="postal" placeholder="Code postal"></div></div>
       <div style="margin-top:8px"><textarea id="notes" rows="2" placeholder="Observations (facultatif)"></textarea></div>
       <div class="actions">
-        <button type="button" id="skipIntake" style="background:#6b7280;border-color:#6b7280">Ignorer</button>
+        <button type="button" id="skipIntake" class="btn-outline">Ignorer</button>
         <button type="button" id="saveIntake">Enregistrer</button>
       </div>
       <div class="hint">Ces infos nous aident à affiner le diagnostic et à te proposer un garage proche. Tu peux ignorer.</div>
@@ -68,7 +72,7 @@
       <div class="row"><div class="col"><input id="cbName" placeholder="Nom"></div><div class="col"><input id="cbPhone" placeholder="Téléphone"></div></div>
       <div class="row" style="margin-top:8px"><div class="col"><input id="cbEmail" placeholder="Email"></div></div>
       <div class="actions">
-        <button type="button" id="cancelCb" style="background:#6b7280;border-color:#6b7280">Annuler</button>
+        <button type="button" id="cancelCb" class="btn-outline">Annuler</button>
         <button type="button" id="saveCb">Envoyer</button>
       </div>
       <div class="hint">On t’appelle rapidement pour caler un rendez-vous avec un garage partenaire sérieux.</div>
@@ -101,7 +105,7 @@
     const prompt = q.value.trim();
     if (!prompt) return;
     out.textContent = "";
-    ctas.innerHTML = "";
+    ctas.innerHTML  = "";
     log.textContent = "Toi: " + prompt;
     btn.disabled = true; state.textContent = "…";
 
@@ -128,7 +132,7 @@
       } catch {}
     };
 
-    // boutons modal intake
+    // handlers modal intake
     document.getElementById("skipIntake").onclick = () => { closeModal(modalIntake); doAfterIntake(); };
     document.getElementById("saveIntake").onclick = async () => {
       const body = {
@@ -153,37 +157,53 @@
     };
   });
 
+  // --- SSE robuste : close sur {done:true}, tolère onerror si du texte a été reçu
   async function streamAnswer(prompt) {
     const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
+    let received = false;
     await new Promise((resolve, reject) => {
       const es = new EventSource(url);
+
       es.onmessage = (e) => {
-        try { const o = JSON.parse(e.data); if (o.delta) out.textContent += o.delta; else out.textContent += e.data; }
-        catch { out.textContent += e.data; }
+        try {
+          const o = JSON.parse(e.data);
+          if (o.error) { es.close(); reject(new Error(o.error)); return; }
+          if (o.delta) { out.textContent += o.delta; received = true; }
+          if (o.done)  { es.close(); resolve(); }
+        } catch {
+          out.textContent += e.data;
+          if (e.data && e.data.length) received = true;
+        }
       };
-      es.addEventListener("done", () => { es.close(); resolve(); });
-      es.onerror = () => { es.close(); reject(new Error("sse_error")); };
+
+      es.onerror = () => {
+        es.close();
+        if (received) resolve();   // fermeture propre tolérée
+        else reject(new Error("sse_error"));
+      };
     });
   }
 
   function renderCTAs(payload){
     if (!payload) return;
-    // boutons CTA
     ctas.innerHTML = "";
+
+    // CTA proposés par le serveur / modèle
     if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
       for (const item of payload.cta.items.slice(0,2)) {
         const b = document.createElement("button");
         b.textContent = item.label || "Action";
-        b.onclick = () => {
-          if (item.url) window.location.href = item.url;
-        };
+        b.className = "btn-outline";
+        b.onclick = () => { if (item.url) window.location.href = item.url; };
         ctas.appendChild(b);
       }
     }
-    // bouton Être rappelé (toujours dispo en plus)
+
+    // bouton Être rappelé (toujours dispo)
     const callBtn = document.createElement("button");
     callBtn.textContent = "Être rappelé";
-    callBtn.style.background = "#0b5";
+    callBtn.style.background = "var(--accent)";
+    callBtn.style.borderColor = "var(--accent)";
     callBtn.onclick = () => openModal(modalCallback);
     ctas.appendChild(callBtn);
 
