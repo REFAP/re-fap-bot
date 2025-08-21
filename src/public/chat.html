@@ -5,20 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Re-FAP assistant</title>
   <style>
-    /* ========= Thème ========= */
     :root{
-      --fg:#0f172a;           /* slate-900 */
-      --muted:#64748b;        /* slate-500 */
-      --border:#e2e8f0;       /* slate-200 */
-      --bg:#f8fafc;           /* slate-50 */
-      --card:#ffffff;
-      --brand:#111827;        /* gray-900 */
-      --accent:#0bb37b;       /* vert */
-      --accent-ghost:#e9fbf4;
-      --shadow: 0 10px 20px rgba(2,6,23,.08);
-      --radius:16px;
+      --fg:#0f172a; --muted:#64748b; --border:#e2e8f0; --bg:#f8fafc; --card:#fff;
+      --brand:#111827; --accent:#0bb37b; --accent-ghost:#e9fbf4;
+      --shadow:0 10px 20px rgba(2,6,23,.08); --radius:16px;
     }
-
     *{box-sizing:border-box}
     html,body{height:100%}
     body{
@@ -28,99 +19,63 @@
         radial-gradient(900px 600px at -10% 10%, #e0f2fe 0%, rgba(224,242,254,0) 45%),
         var(--bg);
       color:var(--fg);
-      font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
-      padding:24px 24px 130px; /* 👈 espace bas pour ne pas cacher “Envoyer” sous la barre sticky */
+      font:16px/1.45 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif;
+      padding:24px 24px 170px; /* 👈 espace bas pour la barre sticky */
     }
-
-    /* ========= Grille ========= */
     .wrap{max-width:980px;margin:0 auto}
-    .card{
-      background:var(--card);
-      border:1px solid var(--border);
-      border-radius:var(--radius);
-      padding:24px;
-      box-shadow: var(--shadow);
-      backdrop-filter: saturate(130%) blur(2px);
-    }
-
-    /* ========= Titre / header ========= */
-    .header{display:flex; align-items:center; gap:12px; margin-bottom:10px;}
-    .logo{
-      display:inline-grid; place-items:center;
-      width:42px;height:42px;border-radius:12px;
-      background:linear-gradient(135deg,#10b981, #0ea5e9);
-      color:#fff; font-weight:800; letter-spacing:.5px;
-      box-shadow: 0 8px 20px rgba(16,185,129,.25);
-    }
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow)}
+    .header{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+    .logo{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#10b981,#0ea5e9);color:#fff;font-weight:800;box-shadow:0 8px 20px rgba(16,185,129,.25)}
     h2{margin:0;font-size:22px}
     .sub{color:var(--muted);font-size:13px;margin-top:2px}
 
-    /* ========= Zone sortie ========= */
+    /* ===== Sortie ===== */
     pre{
-      white-space:pre-wrap; word-wrap:break-word; margin:12px 0 10px;
-      padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:#fff;
-      min-height:60px;
+      white-space:pre-wrap;word-wrap:break-word;margin:12px 0 10px;
+      padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:#fff;
+      min-height:60px; max-height:50vh; overflow:auto;   /* 👈 réduit et scrollable */
     }
 
-    /* ========= Formulaire ========= */
-    textarea,input{
-      width:100%; padding:12px 14px; border:1px solid var(--border);
-      border-radius:12px; font-size:16px; background:#fff;
-    }
+    /* ===== Formulaire (composer) ===== */
+    textarea,input{width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;font-size:16px;background:#fff}
+    #q{min-height:64px;resize:vertical}
+    .composer{display:flex;gap:10px;align-items:stretch;margin-top:10px}  /* 👈 bouton à droite du champ */
+    .composer .send{min-width:clamp(120px,18vw,170px)}
     .row{display:flex;gap:10px}
     .col{flex:1}
     .hint{color:var(--muted);font-size:12px}
 
-    /* ========= Boutons ========= */
-    button,.btn{
-      padding:11px 16px; border-radius:12px; border:1px solid var(--brand);
-      background:var(--brand); color:#fff; cursor:pointer; font-weight:600;
-      box-shadow: 0 6px 14px rgba(2,6,23,.08);
-    }
-    button:disabled{opacity:.6;cursor:not-allowed;filter:grayscale(.1)}
+    /* ===== Boutons ===== */
+    button,.btn{padding:11px 16px;border-radius:12px;border:1px solid var(--brand);background:var(--brand);color:#fff;cursor:pointer;font-weight:600;box-shadow:0 6px 14px rgba(2,6,23,.08)}
+    button:disabled{opacity:.6;cursor:not-allowed}
     .btn-outline{background:#fff;color:var(--fg);border-color:#cbd5e1}
-    .btn-ghost{background:var(--accent-ghost); color:#0b7; border-color:transparent}
-    .btn-accent{background:var(--accent); border-color:var(--accent)}
+    .btn-ghost{background:var(--accent-ghost);color:#0b7;border-color:transparent}
+    .btn-accent{background:var(--accent);border-color:var(--accent)}
     .btn-link{background:transparent;border-color:transparent;color:var(--fg);padding:0}
 
-    /* ========= CTA dynamiques ========= */
+    /* ===== Questions / CTA ===== */
     .cta{display:flex;gap:12px;margin-top:14px;flex-wrap:wrap}
-    .cta > button, .cta > a{min-width:220px}
-
-    /* ========= Questions ========= */
-    .questions{margin:10px 0 0 0;padding-left:20px}
+    .questions{margin:10px 0 0;padding-left:20px}
     .questions li{margin:5px 0}
     .ask{color:#059669;font-weight:800}
     .qtitle{color:#065f46;font-weight:800;margin:14px 0 6px}
 
-    /* ========= État (en cours) ========= */
+    /* ===== Status ===== */
     .status{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
     .dot{width:10px;height:10px;border-radius:50%;background:#cbd5e1}
-    .dot.live{background:#22c55e; box-shadow:0 0 0 0 rgba(34,197,94,.7); animation:pulse 1.6s infinite}
-    @keyframes pulse {
-      0%{box-shadow:0 0 0 0 rgba(34,197,94,.6)}
-      70%{box-shadow:0 0 0 16px rgba(34,197,94,0)}
-      100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}
-    }
+    .dot.live{background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,.7);animation:pulse 1.6s infinite}
+    @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.6)}70%{box-shadow:0 0 0 16px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
 
-    /* ========= Modales ========= */
+    /* ===== Modales ===== */
     .modal{position:fixed;inset:0;background:rgba(2,6,23,.35);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
     .modal.open{display:flex}
     .modal .box{background:#fff;border-radius:16px;padding:20px;max-width:560px;width:100%;border:1px solid var(--border);box-shadow:var(--shadow)}
     .modal h3{margin-top:0}
     .modal .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
 
-    /* ========= Barre d’actions sticky ========= */
-    .sticky-wrap{
-      position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
-      width:min(980px, calc(100% - 24px*2));
-      z-index:15;
-    }
-    .stickybar{
-      display:flex;justify-content:space-between;align-items:center;gap:16px;
-      background:#ffffffcc;border:1px solid var(--border);backdrop-filter: blur(6px) saturate(150%);
-      border-radius:14px;padding:10px 12px;box-shadow:var(--shadow);
-    }
+    /* ===== Barre sticky (CTA permanents) ===== */
+    .sticky-wrap{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);width:min(980px,calc(100% - 24px*2));z-index:15}
+    .stickybar{display:flex;justify-content:space-between;align-items:center;gap:16px;background:#ffffffcc;border:1px solid var(--border);backdrop-filter:blur(6px) saturate(150%);border-radius:14px;padding:10px 12px;box-shadow:var(--shadow)}
     .sb-left{display:flex;align-items:center;gap:10px}
     .sb-actions{display:flex;gap:10px;flex-wrap:wrap}
     .sb-actions .btn{min-width:180px}
@@ -143,26 +98,24 @@
       <pre id="output"></pre>
       <div id="ctas" class="cta"></div>
 
-      <form id="f" style="margin-top:16px">
-        <textarea id="q" rows="3" placeholder="Décris le symptôme (ex. : Voyant moteur + perte de puissance)…"></textarea>
-        <div class="row" style="margin-top:10px;align-items:center">
+      <form id="f">
+        <div class="composer">
+          <textarea id="q" rows="3" placeholder="Décris le symptôme (ex. : Voyant moteur + perte de puissance)…"></textarea>
+          <button id="send" type="submit" class="btn-accent send">Envoyer</button>
+        </div>
+        <div class="row" style="margin-top:6px;align-items:center">
           <div class="col"><span id="state" class="hint"></span></div>
-          <button id="send" type="submit" class="btn-accent">Envoyer</button>
         </div>
       </form>
 
-      <div class="hint" style="margin-top:6px">
-        Le texte arrive en streaming. Les questions utiles et les boutons (CTA) s’affichent ensuite.
-      </div>
+      <div class="hint" style="margin-top:6px">Le texte arrive en streaming. Les questions utiles et les boutons (CTA) s’affichent ensuite.</div>
     </div>
   </div>
 
-  <!-- ==== Barre d’actions permanente ==== -->
+  <!-- Barre d’actions permanente -->
   <div class="sticky-wrap" aria-hidden="false">
     <div class="stickybar">
-      <div class="sb-left">
-        <span class="hint">Besoin d’aide rapide ?</span>
-      </div>
+      <div class="sb-left"><span class="hint">Besoin d’aide rapide ?</span></div>
       <div class="sb-actions">
         <button type="button" id="stickyCallback" class="btn btn-ghost">Être rappelé</button>
         <a id="stickyBooking" href="/rdv" class="btn btn-accent">Demander un diagnostic</a>
@@ -170,7 +123,7 @@
     </div>
   </div>
 
-  <!-- Modal 1: Infos véhicule -->
+  <!-- Modal infos véhicule -->
   <div class="modal" id="modalIntake">
     <div class="box">
       <h3>Quelques infos (optionnel)</h3>
@@ -186,7 +139,7 @@
     </div>
   </div>
 
-  <!-- Modal 2: Être rappelé -->
+  <!-- Modal rappel -->
   <div class="modal" id="modalCallback">
     <div class="box">
       <h3>Être rappelé par un conseiller</h3>
@@ -236,10 +189,8 @@
     return `Contexte véhicule fourni par l’utilisateur : ${parts.join(", ")}. Ne redemande pas ces infos ; demande uniquement ce qui manque.`;
   }
 
-  // Token pour éviter rendus multiples
   let currentToken = null;
 
-  // Handlers modales attachés une fois
   let intakeNext = null;
   document.getElementById("skipIntake").addEventListener("click", () => {
     closeModal(modalIntake);
@@ -267,9 +218,7 @@
     if (typeof intakeNext === "function") intakeNext();
   });
 
-  // Barre sticky
   stickyCallback.onclick = () => openModal(modalCallback);
-
   document.getElementById("cancelCb").onclick = () => closeModal(modalCallback);
   document.getElementById("saveCb").onclick = async () => {
     const body = {
@@ -301,7 +250,7 @@
 
     out.textContent = "";
     ctas.innerHTML  = "";
-    btn.disabled = true; state.textContent = "";
+    btn.disabled = true;
     statusDot.classList.add("live"); statusText.textContent = "Réponse en cours…";
 
     openModal(modalIntake);
@@ -310,17 +259,14 @@
       const ctx = buildLeadContext();
       const effectivePrompt = (ctx ? (ctx + "\n\n") : "") + prompt;
 
-      try {
-        await streamAnswer(effectivePrompt); // texte seul
-      } catch (err) {
-        out.textContent = "Erreur: " + (err?.message || err);
-      } finally {
+      try { await streamAnswer(effectivePrompt); }
+      catch (err) { out.textContent = "Erreur: " + (err?.message || err); }
+      finally {
         if (myToken === currentToken) {
           btn.disabled = false;
           statusDot.classList.remove("live"); statusText.textContent = "Prêt";
         }
       }
-
       if (myToken !== currentToken) return;
 
       try {
@@ -336,7 +282,6 @@
     };
   });
 
-  // SSE robuste : watchdog + fallback non-stream (texte seul)
   async function streamAnswer(prompt) {
     const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
     let received = false;
@@ -352,9 +297,7 @@
             const j = await r.json().catch(() => ({}));
             out.textContent = j?.text || out.textContent || "";
             resolve();
-          } catch {
-            reject(new Error("fallback_failed"));
-          }
+          } catch { reject(new Error("fallback_failed")); }
         }
       }, watchdogMs);
     };
@@ -377,17 +320,14 @@
       };
 
       es.onerror = async () => {
-        es.close();
-        clearTimeout(watchdog);
+        es.close(); clearTimeout(watchdog);
         if (received) { resolve(); return; }
         try {
           const r = await fetch(`/api/diagnose?prompt=${encodeURIComponent(prompt)}`);
           const j = await r.json().catch(() => ({}));
           out.textContent = j?.text || out.textContent || "";
           resolve();
-        } catch {
-          reject(new Error("sse_error_and_fallback_failed"));
-        }
+        } catch { reject(new Error("sse_error_and_fallback_failed")); }
       };
     });
   }
@@ -396,13 +336,9 @@
     if (!Array.isArray(nextQuestions)) return;
     const seen = new Set();
     const cleaned = nextQuestions
-      .map(s => String(s || "").trim())
+      .map(s => String(s||"").trim())
       .filter(Boolean)
-      .filter(q => {
-        const key = q.toLowerCase().replace(/\s+/g, " ");
-        if (seen.has(key)) return false;
-        seen.add(key); return true;
-      });
+      .filter(q => { const k=q.toLowerCase().replace(/\s+/g," "); if(seen.has(k))return false; seen.add(k); return true; });
     if (!cleaned.length) return;
 
     const block = document.createElement("div");
@@ -411,12 +347,8 @@
     title.textContent = "Voici quelques questions pour affiner le diagnostic et t’aider à trouver la bonne solution :";
     block.appendChild(title);
 
-    const ul = document.createElement("ul");
-    ul.className = "questions";
-    cleaned.forEach(q => {
-      const li = document.createElement("li"); li.className = "ask"; li.textContent = q;
-      ul.appendChild(li);
-    });
+    const ul = document.createElement("ul"); ul.className="questions";
+    cleaned.forEach(q => { const li=document.createElement("li"); li.className="ask"; li.textContent=q; ul.appendChild(li); });
     block.appendChild(ul);
 
     ctas.appendChild(block);
@@ -424,35 +356,18 @@
 
   function renderCTAs(payload){
     if (!payload) return;
+    const SKIP_BOOKING=true, SKIP_CALLBACK=true; // doublons couverts par la barre sticky
+    const keys=new Set();
 
-    // On n’affiche ici que les “extras”. Les deux actions principales
-    // (RDV et Rappel) sont déjà disponibles en barre sticky.
-    const SKIP_BOOKING  = true;   // évite le doublon “Prendre RDV”
-    const SKIP_CALLBACK = true;   // évite le doublon “Être rappelé”
-
-    const keys = new Set();
-    const pushEl = (el, label) => {
-      const key = (label||"").toLowerCase().trim();
-      if (!key || keys.has(key)) return;
-      keys.add(key);
-      ctas.appendChild(el);
-    };
+    const push = (el,label)=>{const k=(label||"").toLowerCase().trim(); if(!k||keys.has(k))return; keys.add(k); ctas.appendChild(el);};
 
     if (payload?.cta?.show && Array.isArray(payload.cta.items)) {
-      payload.cta.items.forEach(it => {
-        const type  = (it.type||"").toLowerCase();
-        const label = (it.label||"").trim();
-        const url   = it.url || null;
-
-        const isBooking  = type==="booking"  || /rdv|diagnostic/i.test(label);
-        const isCallback = type==="callback" || /rappel/i.test(label);
+      payload.cta.items.forEach(it=>{
+        const type=(it.type||"").toLowerCase(); const label=(it.label||"").trim(); const url=it.url||null;
+        const isBooking=type==="booking"||/rdv|diagnostic/i.test(label);
+        const isCallback=type==="callback"||/rappel/i.test(label);
         if ((SKIP_BOOKING && isBooking) || (SKIP_CALLBACK && isCallback)) return;
-
-        const el = document.createElement(url ? "a" : "button");
-        el.textContent = label || "Action";
-        el.className = "btn btn-outline";
-        if (url) el.href = url;
-        pushEl(el, label);
+        const el=document.createElement(url?"a":"button"); el.textContent=label||"Action"; el.className="btn btn-outline"; if(url) el.href=url; push(el,label);
       });
     }
   }
