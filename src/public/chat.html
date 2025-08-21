@@ -5,122 +5,106 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Re-FAP assistant</title>
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
-    header { padding: 16px 20px; border-bottom: 1px solid #ddd; }
-    main { max-width: 900px; margin: 0 auto; padding: 16px; }
-    .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-    #log { border: 1px solid #ddd; border-radius: 8px; padding: 12px; min-height: 240px; white-space: pre-wrap; }
-    .msg { margin: 0 0 8px; }
-    .you { color: #444; }
-    .bot { color: #0a7; }
-    .err { color: #b00; }
-    .small { font-size: 12px; opacity: .7; }
-    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #999; cursor: pointer; }
-    input { padding: 10px 12px; border-radius: 8px; border: 1px solid #ccc; width: 100%; font: inherit; }
-    .hint { margin-top: 12px; }
+    body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:24px;background:#fafafa;color:#111}
+    .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;max-width:980px;margin:0 auto}
+    .bot{color:#059669;margin-bottom:12px}
+    .me{color:#111;margin:8px 0 16px}
+    textarea{width:100%;padding:14px;border:1px solid #d1d5db;border-radius:12px;font-size:16px}
+    button{padding:10px 16px;border:1px solid #111;border-radius:10px;background:#111;color:#fff;cursor:pointer}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    pre{white-space:pre-wrap;word-wrap:break-word}
+    .hint{color:#6b7280;margin-top:10px;font-size:12px}
+    .err{color:#b91c1c;white-space:pre-wrap}
   </style>
 </head>
 <body>
-  <header><strong>Re-FAP assistant</strong></header>
+  <div class="card">
+    <div class="bot">Bot: Salut ! Décris ton symptôme et je t’aide à diagnostiquer.</div>
+    <div id="log" class="me"></div>
+    <pre id="output"></pre>
 
-  <main>
-    <div id="log" aria-live="polite"></div>
+    <form id="f" style="margin-top:16px">
+      <textarea id="q" rows="3" placeholder="Décris le symptôme..."></textarea>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
+        <button id="send" type="submit">Envoyer</button>
+        <span id="state" class="hint"></span>
+      </div>
+    </form>
 
-    <div class="hint small">
-      Saisis un symptôme (ex : « Voyant moteur 308 HDi 2014 »), puis “Envoyer”.
+    <div class="hint">
+      Streaming via <code>/api/diagnose/stream</code> (GET SSE).
+      Si le streaming n’est pas dispo, on bascule automatiquement en réponse non-stream (<code>/api/diagnose</code>).
     </div>
-
-    <div class="row" style="margin-top:12px">
-      <input id="q" placeholder="Décris le symptôme…" />
-      <button id="send">Envoyer</button>
-    </div>
-
-    <div class="small hint">
-      Streaming via <code>/api/diagnose/stream</code> (GET SSE). Si le streaming n’est pas disponible,
-      on bascule automatiquement en réponse non-stream (<code>/api/admin/rag/diagnose</code>).
-    </div>
-  </main>
+  </div>
 
   <script>
-    const log = document.getElementById('log');
-    const q   = document.getElementById('q');
-    const btn = document.getElementById('send');
+  const out = document.getElementById("output");
+  const log = document.getElementById("log");
+  const state = document.getElementById("state");
+  const form = document.getElementById("f");
+  const q = document.getElementById("q");
+  const btn = document.getElementById("send");
 
-    function append(text, cls='') {
-      const p = document.createElement('div');
-      p.className = 'msg ' + cls;
-      p.textContent = text;
-      log.appendChild(p);
-      log.scrollTop = log.scrollHeight;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const prompt = q.value.trim();
+    if (!prompt) return;
+    out.textContent = "";
+    log.textContent = "Toi: " + prompt;
+    btn.disabled = true;
+    state.textContent = "…";
+
+    try {
+      await diagnose(prompt);
+    } catch (err) {
+      out.innerHTML = `<span class="err">Erreur: ${err?.message || err}</span>`;
+    } finally {
+      btn.disabled = false;
+      state.textContent = "";
     }
+  });
 
-    async function send() {
-      const text = q.value.trim();
-      if (!text) return;
-      q.value = '';
-      append('Toi: ' + text, 'you');
-
-      // 1) Tentative SSE (GET)
-      let es;
-      try {
-        const url = '/api/diagnose/stream?q=' + encodeURIComponent(text);
-        es = new EventSource(url);
-
-        let gotChunk = false;
-        let closed = false;
-
-        es.onmessage = (ev) => {
+  async function diagnose(prompt) {
+    // 1) Essai streaming SSE (GET avec ?prompt=...)
+    const url = `/api/diagnose/stream?prompt=${encodeURIComponent(prompt)}`;
+    try {
+      await new Promise((resolve, reject) => {
+        const es = new EventSource(url);
+        es.onmessage = (e) => {
+          // Le serveur envoie {delta: "..."} ou du texte brut; gérons les deux.
           try {
-            const data = JSON.parse(ev.data);
-            if (data.delta) { append(data.delta, 'bot'); gotChunk = true; }
-            if (data.error) { append('Erreur SSE: ' + data.error, 'err'); es.close(); closed = true; }
-            if (data.done)  { es.close(); closed = true; }
-          } catch {}
-        };
-        es.onerror = () => { try { es.close(); } catch {} closed = true; };
-
-        // Fallback si aucun token reçu sous 2,5s
-        setTimeout(async () => {
-          if (!gotChunk && !closed) {
-            try { es.close(); } catch {}
-            await fallbackREST(text);
+            const o = JSON.parse(e.data);
+            if (o.delta) out.textContent += o.delta;
+            else if (o.error) { es.close(); reject(new Error(o.error)); }
+            else if (typeof o === "string") out.textContent += o;
+          } catch {
+            out.textContent += e.data;
           }
-        }, 2500);
-
-        return;
-      } catch (e) {
-        try { es?.close(); } catch {}
-        await fallbackREST(text);
+        };
+        es.addEventListener("done", () => { es.close(); resolve(); });
+        es.onerror = () => { es.close(); reject(new Error("sse_error")); };
+      });
+      return;
+    } catch (_) {
+      // 2) Fallback non-stream propre: POST sur /api/diagnose (plus /api/admin/rag/diagnose)
+      const r = await fetch("/api/diagnose", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+        body: prompt
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(`HTTP ${r.status}: ${txt}`);
+      }
+      const ct = r.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await r.json();
+        out.textContent = j.text || JSON.stringify(j);
+      } else {
+        out.textContent = await r.text();
       }
     }
-
-    async function fallbackREST(text) {
-      try {
-        const r = await fetch('/api/admin/rag/diagnose', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ prompt: text })
-        });
-
-        const ctype = r.headers.get('content-type') || '';
-        if (ctype.includes('application/json')) {
-          const j = await r.json();
-          if (j?.text)       append(j.text, 'bot');
-          else if (j?.error) append('Erreur API: ' + j.error, 'err');
-          else               append('Réponse vide (JSON).', 'err');
-        } else {
-          const txt = await r.text();
-          append(`Erreur réseau (HTTP ${r.status}) : ${txt.substring(0, 300)}${txt.length>300?'…':''}`, 'err');
-        }
-      } catch (e) {
-        append('Erreur réseau: ' + e.message, 'err');
-      }
-    }
-
-    btn.onclick = send;
-    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
-    append('Bot: Salut ! Décris ton symptôme et je t’aide à diagnostiquer.', 'bot');
+  }
   </script>
 </body>
 </html>
